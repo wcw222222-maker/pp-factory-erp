@@ -42,9 +42,13 @@ def save_data(df, sheet_name):
     try:
         client = get_db_connection()
         ws = client.worksheet(sheet_name)
+        
+        # FIX: Replace NaN (errors) with empty strings before saving
+        df = df.fillna("") 
+        
         ws.clear()
         ws.update([df.columns.values.tolist()] + df.values.tolist())
-        load_data.clear() # Clear cache to show update immediately
+        load_data.clear() # Clear cache
     except Exception as e:
         st.error(f"Save Error: {e}")
 
@@ -373,3 +377,4 @@ elif menu == "🏆 Leaderboard":
     h_df = ensure_cols(load_data("HANDOVER"), ["Operator", "Output_kg"])
     if not h_df.empty:
         st.bar_chart(h_df.groupby("Operator")["Output_kg"].sum())
+
