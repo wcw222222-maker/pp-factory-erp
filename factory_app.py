@@ -102,28 +102,39 @@ with st.sidebar:
         "🏆 Leaderboard"
     ])
     st.divider()
-    st.caption(f"Server Time: {datetime.now().strftime('%H:%M')}")
+    # 🔐 SIDEBAR BOSS OVERRIDE
+    st.subheader("🛡️ Admin Bypass")
+    boss_key = st.text_input("Boss Password", type="password", help="Enter secret key to sell below RM 12.60")
+    is_boss = (boss_key == "boss777")
+    if is_boss:
+        st.success("🔓 BOSS MODE ACTIVE")
 
 # --- 5. MODULE: QUOTATION & CRM ---
 if menu == "📝 Quotation & CRM":
-    st.header("📝 Smart Quotation System")
+    st.header("📝 Smart Quotation & CRM")
     MANAGERS = {"Iris": "iris888", "Tomy": "tomy999"}
 
-    q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Product", "Weight", "Price", "Status", "Date", "Thickness", "Width", "Length"])
+    q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Product", "Weight", "Price", "Status", "Date", "Thickness", "Width", "Length", "Auth_By"])
     c_df = ensure_cols(load_data("CUSTOMER"), ["Name", "Contact", "Phone"])
 
-    # A. ADD CUSTOMER
+    # A. ADD CUSTOMER (SAFE APPEND VERSION)
     with st.expander("👤 Add New Customer"):
-        with st.form("add_cust"):
+        with st.form("add_cust", clear_on_submit=True):
             c1, c2 = st.columns(2)
             n_name = c1.text_input("Company Name")
             n_phone = c2.text_input("Phone (60...)")
             if st.form_submit_button("Save Customer"):
                 if n_name:
-                    new_c = pd.DataFrame([{"Name": n_name, "Phone": n_phone, "Contact": ""}])
-                    save_data(pd.concat([c_df, new_c], ignore_index=True), "CUSTOMER")
-                    st.success("Saved!")
-                    st.rerun()
+                    try:
+                        client = get_db_connection()
+                        ws = client.worksheet("CUSTOMER")
+                        ws.append_row([n_name, "", n_phone]) # Safe append
+                        st.success(f"✅ {n_name} added!")
+                        load_data.clear()
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
     # B. PP SHEET CALCULATOR
     st.subheader("1. PP Sheet Weight Calculator")
@@ -131,28 +142,44 @@ if menu == "📝 Quotation & CRM":
         cust_list = c_df["Name"].unique().tolist() if not c_df.empty else ["Cash Customer"]
         c_in = st.selectbox("Select Customer", cust_list)
         col1, col2, col3, col4 = st.columns(4)
-        th = col1.number_input("Thick (mm)", 0.5, step=0.1)
+        th = col1.number_input("Thick (mm)", 0.50, step=0.05, format="%.2f")
         wd = col2.number_input("Width (mm)", 650.0, step=10.0)
         lg = col3.number_input("Length (mm)", 900.0, step=10.0)
         qty = col4.number_input("Qty (Pcs)", 1000, step=100)
         
         # MATH: T * W * L * 0.91 * Qty / 1,000,000
         calc_wgt = (th * wd * lg * 0.91 * qty) / 1000000
-        rate = st.number_input("RM per KG", 5.50, step=0.1)
+        
+        st.divider()
+        rate = st.number_input("Selling Price per KG (RM)", value=12.60, min_value=0.0, step=0.10)
+        
+        # 🛡️ PRICE GUARDRAIL
+        MIN_PRICE = 12.60
+        can_save = True
+        auth_level = "Standard"
+
+        if rate < MIN_PRICE:
+            if is_boss:
+                st.warning("⚠️ Boss Override Applied.")
+                auth_level = "BOSS_BYPASS"
+            else:
+                st.error(f"🚫 BLOCKED: Price cannot be below RM {MIN_PRICE:.2f}. Ask Janson for bypass.")
+                can_save = False
+        
         calc_price = calc_wgt * rate
+        st.info(f"⚖️ Total Weight: **{calc_wgt:.2f} kg** | 💰 Total Price: **RM {calc_price:,.2f}**")
         
-        st.info(f"⚖️ Calculated Weight: **{calc_wgt:.2f} kg** | 💰 Total: **RM {calc_price:,.2f}**")
-        
-        if st.button("💾 Save Quotation"):
+        if st.button("💾 Save Quotation", disabled=not can_save):
             new_q = {
                 "Doc_ID": f"QT-{datetime.now().strftime('%y%m%d-%H%M')}",
                 "Customer": c_in, "Product": f"PP Sheet {th}mm x {wd}mm x {lg}mm",
                 "Thickness": th, "Width": wd, "Length": lg,
                 "Weight": calc_wgt, "Price": calc_price, "Status": "Pending Approval",
-                "Date": datetime.now().strftime("%Y-%m-%d")
+                "Date": datetime.now().strftime("%Y-%m-%d"),
+                "Auth_By": auth_level # Audit Log
             }
             save_data(pd.concat([q_df, pd.DataFrame([new_q])], ignore_index=True), "QUOTE")
-            st.success("Quote Generated!")
+            st.success("Quote Saved to Audit Log!")
             st.rerun()
 
     # C. APPROVAL & WHATSAPP
@@ -160,14 +187,18 @@ if menu == "📝 Quotation & CRM":
     ca1, ca2 = st.columns(2)
     with ca1:
         st.subheader("📋 Approvals")
-        pwd = st.text_input("Password", type="password")
+        pwd = st.text_input("Manager Password", type="password")
+        is_auth = (pwd in MANAGERS.values()) or (pwd == "boss777")
         pend = q_df[q_df["Status"] == "Pending Approval"]
         for i, r in pend.iterrows():
-            st.write(f"**{r['Doc_ID']}** ({r['Customer']})")
-            if pwd in MANAGERS.values():
-                if st.button(f"Approve {r['Doc_ID']}"):
-                    q_df.at[i, "Status"] = "Approved"
-                    save_data(q_df, "QUOTE"); st.rerun()
+            with st.container(border=True):
+                label = "⚠️ [BYPASS]" if r.get("Auth_By") == "BOSS_BYPASS" else ""
+                st.write(f"**{r['Doc_ID']}** {label}")
+                st.caption(f"{r['Customer']} | RM {r['Price']:,.2f}")
+                if is_auth:
+                    if st.button(f"Approve {r['Doc_ID']}", key=f"app_{i}"):
+                        q_df.at[i, "Status"] = "Approved"
+                        save_data(q_df, "QUOTE"); st.rerun()
     with ca2:
         st.subheader("📤 WhatsApp")
         appr = q_df[q_df["Status"] == "Approved"]
@@ -176,8 +207,8 @@ if menu == "📝 Quotation & CRM":
             if not c_df.empty:
                 m = c_df[c_df["Name"] == r["Customer"]]
                 if not m.empty: phone = str(m.iloc[0]["Phone"])
-            wa_link = f"https://wa.me/{phone}?text=Hi {r['Customer']}, Quote {r['Doc_ID']} is ready. Total: RM {r['Price']:.2f}"
-            st.link_button(f"Send to {r['Customer']}", wa_link)
+            wa_link = f"https://wa.me/{phone}?text=Hi {r['Customer']}, Quote {r['Doc_ID']} for RM {r['Price']:.2f} is ready."
+            st.link_button(f"Notify {r['Customer']}", wa_link)
 
 # --- 6. MODULE: PRODUCTION FLOOR ---
 elif menu == "🏭 Production Floor":
@@ -206,8 +237,8 @@ elif menu == "🚚 Logistics & Billing":
         with st.container(border=True):
             st.write(f"**{r['Customer']}** - {r['Doc_ID']}")
             c1, c2 = st.columns(2)
-            c1.download_button("📄 Download DO", generate_pdf("DELIVERY ORDER", r).getvalue(), f"DO_{r['Doc_ID']}.pdf")
-            c2.download_button("💰 Download INV", generate_pdf("INVOICE", r).getvalue(), f"INV_{r['Doc_ID']}.pdf")
+            c1.download_button("📄 DO", generate_pdf("DELIVERY ORDER", r).getvalue(), f"DO_{r['Doc_ID']}.pdf")
+            c2.download_button("💰 INV", generate_pdf("INVOICE", r).getvalue(), f"INV_{r['Doc_ID']}.pdf")
 
 # --- OTHER MODULES ---
 elif menu == "📦 Warehouse & Mixing":
@@ -215,7 +246,7 @@ elif menu == "📦 Warehouse & Mixing":
     st.dataframe(load_data("INVENTORY"), use_container_width=True)
 elif menu == "🔧 Maintenance":
     st.header("🔧 Maintenance")
-    st.write("Check health in Google Sheet Settings tab.")
+    st.info("Check machine health in Google Sheet Settings.")
 elif menu == "🏆 Leaderboard":
-    st.header("🏆 Leaderboard")
-    st.info("Log production to see rankings.")
+    st.header("🏆 Performance")
+    st.info("Production logs will appear here.")
