@@ -1,7 +1,5 @@
 streamlit
-torch
 pandas
-numpy
-yfinance
-matplotlib
-gym
+gspread
+oauth2client
+reportlab
