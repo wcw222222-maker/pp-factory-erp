@@ -12,7 +12,7 @@ from reportlab.lib import colors
 # --- 1. THEME & PAGE CONFIG ---
 st.set_page_config(page_title="PP Products ERP", layout="wide", initial_sidebar_state="expanded")
 
-# --- CUSTOM CSS FOR HIGH CONTRAST & VISIBILITY ---
+# --- CUSTOM CSS: ORANGE TEXT MODE ---
 st.markdown("""
     <style>
     /* 1. Main Background - Light Blue */
@@ -26,44 +26,51 @@ st.markdown("""
         border-right: 2px solid #b3e5fc;
     }
 
-    /* 3. TOP HEADER BAR - FORCE LIGHT BLUE (Fixes the visibility issue) */
+    /* 3. TOP HEADER BAR - FORCE LIGHT BLUE */
     header[data-testid="stHeader"] {
         background-color: #f0f8ff !important;
     }
 
-    /* 4. FORCE ALL TEXT TO BLACK (High Contrast) */
-    .stMarkdown, .stText, p, div, span, label, li, h1, h2, h3, h4, h5, h6 {
-        color: #000000 !important;
+    /* 4. FORCE ALL TEXT TO DEEP ORANGE */
+    /* This targets paragraphs, labels, spans, lists, and headers */
+    .stMarkdown, .stText, p, div, span, label, li, h1, h2, h3, h4, h5, h6, b, strong {
+        color: #d84315 !important; /* Deep Burnt Orange for visibility */
     }
 
-    /* 5. Metrics - Make numbers pop in Blue */
+    /* 5. Metrics - Make numbers pop in Bright Orange */
     [data-testid="stMetricValue"] {
-        color: #0288d1 !important;
+        color: #bf360c !important; /* Darker Orange */
     }
     
-    /* 6. Input Fields - White Background with Black Text */
+    /* 6. Input Fields - White Background with Orange Text */
     .stTextInput>div>div>input, .stNumberInput>div>div>input, .stSelectbox>div>div>div, .stTextArea>div>div>textarea {
         background-color: #ffffff !important;
-        color: #000000 !important;
-        border: 1px solid #b3e5fc;
+        color: #d84315 !important;
+        border: 2px solid #ffab91; /* Light Orange Border */
     }
 
-    /* 7. Buttons - Professional Blue */
+    /* 7. Buttons - Orange Style */
     .stButton>button {
-        background-color: #0288d1 !important;
+        background-color: #ff5722 !important; /* Material Design Orange */
         color: white !important;
         border-radius: 5px;
         border: none;
         font-weight: bold;
     }
     .stButton>button:hover {
-        background-color: #03a9f4 !important;
+        background-color: #e64a19 !important; /* Darker Orange on Hover */
         color: white !important;
     }
     
     /* 8. Success/Error Messages */
     .stSuccess, .stError, .stInfo {
         background-color: #ffffff !important;
+        color: #d84315 !important;
+    }
+    
+    /* 9. Dataframes/Tables - Force Black text inside tables for readability */
+    div[data-testid="stDataFrame"] div {
+        color: #000000 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -139,7 +146,7 @@ def generate_pdf(doc_type, data, customer_df):
     
     # Table Header
     y = height - 230
-    p.setFillColor(colors.lightsteelblue); p.rect(50, y, width - 100, 20, fill=1, stroke=0)
+    p.setFillColor(colors.orange); p.rect(50, y, width - 100, 20, fill=1, stroke=0)
     p.setFillColor(colors.black); p.setFont("Helvetica-Bold", 10)
     p.drawString(60, y + 6, "Description"); p.drawString(350, y + 6, "Weight (kg)")
     if doc_type == "INVOICE": p.drawString(480, y + 6, "Total (RM)")
@@ -221,7 +228,7 @@ elif menu == "📝 Quote & CRM":
         lg = col3.number_input("Length (mm)", 900.0)
         qty = col4.number_input("Quantity (Pcs)", 1000)
         
-        # Calculate Weight: T * W * L * Density (0.91) * Qty / 1,000,000
+        # Calculate Weight
         calc_wgt = (th * wd * lg * 0.91 * qty) / 1000000
         rate = st.number_input("Price/KG (RM)", 12.60)
         
