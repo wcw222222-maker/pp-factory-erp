@@ -1,317 +1,305 @@
-import streamlit as st
-import pandas as pd
-from datetime import datetime
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-import io
+import sys
+import os
 import time
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-from reportlab.lib import colors
+import random
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import gym
+from collections import deque
+from datetime import date, timedelta
+from google.colab import drive
 
-# --- 1. THEME & PAGE CONFIG ---
-st.set_page_config(page_title="PP Products ERP", layout="wide", initial_sidebar_state="expanded")
+# 1. MOUNT DRIVE
+if not os.path.exists('/content/drive'):
+    drive.mount('/content/drive')
 
-# Custom CSS for Light Blue Theme
-st.markdown("""
-    <style>
-    /* Main Background */
-    .stApp {
-        background-color: #f0f8ff;
-    }
-    /* Sidebar Background */
-    [data-testid="stSidebar"] {
-        background-color: #e1f5fe;
-        border-right: 2px solid #b3e5fc;
-    }
-    /* Headers */
-    h1, h2, h3 {
-        color: #01579b;
-    }
-    /* Buttons */
-    .stButton>button {
-        background-color: #0288d1;
-        color: white;
-        border-radius: 5px;
-        border: none;
-    }
-    .stButton>button:hover {
-        background-color: #03a9f4;
-        color: white;
-    }
-    /* Metrics */
-    [data-testid="stMetricValue"] {
-        color: #0288d1;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+# 2. INSTALL YFINANCE
+try:
+    import yfinance as yf
+except ImportError:
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance"])
+    import yfinance as yf
 
-# --- 2. CLOUD CONNECTION ---
-@st.cache_resource
-def get_db_connection():
-    try:
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds_dict = st.secrets["gcp_service_account"]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        client = gspread.authorize(creds)
-        return client.open("PP_ERP_Database")
-    except Exception as e:
-        st.error(f"Connection Failed: {e}")
-        return None
+# --- HIGH CONTRAST COLORS ---
+class C:
+    GREEN = '\033[92m'
+    RED = '\033[91m'
+    CYAN = '\033[96m'
+    YELLOW = '\033[93m'
+    BOLD = '\033[1m'
+    RESET = '\033[0m'
 
-# --- 3. DATA ENGINE ---
-@st.cache_data(ttl=10)
-def load_data(sheet_name):
-    try:
-        client = get_db_connection()
-        if not client: return pd.DataFrame()
-        ws = client.worksheet(sheet_name)
-        return pd.DataFrame(ws.get_all_records())
-    except:
-        return pd.DataFrame()
+# --- CONFIGURATION ---
+BRAIN_FILE = "/content/drive/My Drive/world_indices_lstm_v2.pth"
+STOCK_LIST = ['^DJI', '^GSPC', '^IXIC', '^HSI', '^FTSE', '^GDAXI']
 
-def save_data(df, sheet_name):
-    try:
-        client = get_db_connection()
-        ws = client.worksheet(sheet_name)
-        df = df.fillna("") 
-        ws.clear()
-        ws.update([df.columns.values.tolist()] + df.values.tolist())
-        load_data.clear() 
-    except Exception as e:
-        st.error(f"Save Error: {e}")
+START_DATE = '2015-01-01'
+yesterday = date.today() - timedelta(days=1)
+END_DATE = yesterday.strftime('%Y-%m-%d')
 
-def ensure_cols(df, cols):
-    if df.empty: return pd.DataFrame(columns=cols)
-    for c in cols:
-        if c not in df.columns:
-            is_num = any(x in c for x in ["Price", "Weight", "Thick", "Width", "Length"])
-            df[c] = 0.0 if is_num else ""
-    return df
+SEQUENCE_LENGTH = 30   
+BATCH_SIZE = 32       
+GAMMA = 0.95           
+LEARNING_RATE = 0.0001 
+MEMORY_SIZE = 10000
 
-# --- 4. PDF ENGINE ---
-def generate_pdf(doc_type, data, customer_df):
-    buffer = io.BytesIO()
-    p = canvas.Canvas(buffer, pagesize=A4)
-    width, height = A4
-    p.setFont("Helvetica-Bold", 16); p.drawString(50, height - 50, "PP PRODUCTS SDN BHD")
-    p.setFont("Helvetica", 9); p.drawString(50, height - 65, "28 Jalan Mas Jaya 3, Cheras 43200, Selangor")
-    p.line(50, height - 85, width - 50, height - 85)
-    
-    # Address Logic
-    cust_addr = "No Address Provided"
-    if not customer_df.empty:
-        match = customer_df[customer_df["Name"] == data['Customer']]
-        if not match.empty: cust_addr = str(match.iloc[0].get("Address", "No Address"))
-
-    p.setFont("Helvetica-Bold", 11); p.drawString(50, height - 120, "BILL / SHIP TO:")
-    p.setFont("Helvetica", 10); p.drawString(50, height - 135, f"{data['Customer']}")
-    t = p.beginText(50, height - 150); t.setFont("Helvetica", 9); t.textLines(cust_addr); p.drawText(t)
-    
-    p.drawRightString(width - 50, height - 135, f"Date: {data['Date']}")
-    p.drawRightString(width - 50, height - 150, f"Ref: {data['Doc_ID']}")
-    
-    y = height - 230
-    p.setFillColor(colors.lightsteelblue); p.rect(50, y, width - 100, 20, fill=1, stroke=0)
-    p.setFillColor(colors.black); p.setFont("Helvetica-Bold", 10)
-    p.drawString(60, y + 6, "Description"); p.drawString(350, y + 6, "Weight (kg)")
-    if doc_type == "INVOICE": p.drawString(480, y + 6, "Total (RM)")
-    
-    y -= 25; p.setFont("Helvetica", 10)
-    p.drawString(60, y, f"{data['Product']}"); p.drawString(350, y, f"{data['Weight']:.2f}")
-    if doc_type == "INVOICE": p.drawString(480, y, f"{data['Price']:,.2f}")
-
-    y_f = 120; p.line(50, y_f, width - 50, y_f)
-    p.setFont("Helvetica-Bold", 8); p.drawString(50, y_f - 15, "TERMS & CONDITIONS:")
-    if doc_type == "INVOICE":
-        tc = ["1. Terms: 30 Days.", "2. Overdue: 1.5% interest per month.", "3. Bank: Public Bank 3123-XXXX-XXXX"]
-    else:
-        tc = ["1. Received in good condition.", "2. No claims allowed after signing.", "3. Chop and sign required."]
-    y_t = y_f - 25
-    for line in tc: p.drawString(50, y_t, line); y_t -= 10
-    p.save(); return buffer
-
-# --- 5. SIDEBAR ---
-with st.sidebar:
-    st.title("🛡️ PP ERP ADMIN")
-    menu = st.radio("MAIN MENU", ["🏠 Dashboard", "📝 Quote & CRM", "📞 Sales Follow-Up", "🏭 Production", "🚚 Logistics", "💰 Payments", "📦 Warehouse"])
-    st.divider()
-    boss_pwd = st.text_input("Boss Override", type="password")
-    is_boss = (boss_pwd == "boss777")
-
-# --- 6. MODULE: DASHBOARD ---
-if menu == "🏠 Dashboard":
-    st.header("🏠 Factory & Sales Dashboard")
-    q_df = ensure_cols(load_data("QUOTE"), ["Price", "Status", "Sales_Person", "Payment_Status"])
-    
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total Revenue", f"RM {q_df[q_df['Status']=='Completed']['Price'].sum():,.2f}")
-    c2.metric("Uncollected Cash", f"RM {q_df[(q_df['Status']=='Completed') & (q_df['Payment_Status']!='Paid')]['Price'].sum():,.2f}")
-    
-    # Edward vs Sujita Comparison
-    ed_count = len(q_df[q_df['Sales_Person'] == 'Edward'])
-    su_count = len(q_df[q_df['Sales_Person'] == 'Sujita'])
-    c3.metric("Lead Source", f"Edward ({ed_count})", delta=f"Sujita ({su_count})")
-    
-    st.divider()
-    st.subheader("📊 Sales Force Analytics")
-    if not q_df.empty:
-        st.bar_chart(q_df.groupby("Sales_Person")["Price"].sum())
-
-# --- 7. MODULE: QUOTE & CRM ---
-elif menu == "📝 Quote & CRM":
-    st.header("📝 Create Quotation")
-    MANAGERS = {"Iris": "iris888", "Tomy": "tomy999"}
-    q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Product", "Weight", "Price", "Status", "Date", "Auth_By", "Sales_Person", "Loss_Reason", "Improvement_Plan"])
-    c_df = ensure_cols(load_data("CUSTOMER"), ["Name", "Phone", "Address"])
-
-    with st.expander("👤 Register New Customer"):
-        with st.form("add_cust", clear_on_submit=True):
-            n_name, n_phone, n_addr = st.text_input("Company Name"), st.text_input("WhatsApp (60...)"), st.text_area("Full Address")
-            if st.form_submit_button("Save"):
-                get_db_connection().worksheet("CUSTOMER").append_row([n_name, "", n_phone, n_addr])
-                st.success("Customer Registered!"); load_data.clear(); time.sleep(1); st.rerun()
-
-    with st.container(border=True):
-        st.subheader("📐 PP Sheet Calculator")
-        clist = c_df["Name"].tolist() if not c_df.empty else ["Cash"]
+# ==========================================
+# 1. THE "RELATIVE VISION" ENVIRONMENT
+# ==========================================
+class YahooFinanceEnv(gym.Env):
+    def __init__(self, stock_list, start, end, seq_len):
+        self.stock_data = {}
+        self.tickers = stock_list
+        self.seq_len = seq_len
         
-        c1, c2 = st.columns(2)
-        cin = c1.selectbox("Select Customer", clist)
-        sperson = c2.selectbox("Assigned Sales Person", ["Sujita", "Edward"])
+        print(f"{C.CYAN}{C.BOLD}Downloading World Indices (Stationary Mode)...{C.RESET}")
+        for ticker in stock_list:
+            try:
+                df = yf.download(ticker, start=start, end=end, progress=False)
+                if len(df) > 500: 
+                    self.stock_data[ticker] = self._process_data(df)
+                    print(f"{C.GREEN}✅ Loaded {ticker}{C.RESET}")
+            except Exception as e:
+                print(f"{C.RED}❌ Error {ticker}: {e}{C.RESET}")
         
-        col1, col2, col3, col4 = st.columns(4)
-        th = col1.number_input("Thickness (mm)", 0.50, format="%.2f")
-        wd = col2.number_input("Width (mm)", 650.0)
-        lg = col3.number_input("Length (mm)", 900.0)
-        qty = col4.number_input("Quantity (Pcs)", 1000)
+        if not self.stock_data: raise ValueError("No data loaded!")
         
-        # Calculate Weight: T * W * L * Density (0.91) * Qty / 1,000,000
-        calc_wgt = (th * wd * lg * 0.91 * qty) / 1000000
-        rate = st.number_input("Price/KG (RM)", 12.60)
+        self.action_space = gym.spaces.Discrete(3)
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(seq_len, 10), dtype=np.float32)
+        self.reset()
+
+    def _process_data(self, df):
+        close = df['Close']
+        if isinstance(close, pd.DataFrame): close = close.iloc[:, 0]
         
-        can_save, auth_lvl = True, "Standard"
-        if rate < 12.60:
-            if is_boss: auth_lvl = "BOSS_BYPASS"
-            else: st.error("🚫 Price Floor Violation: Minimum RM 12.60 required."); can_save = False
+        df['Returns'] = close.pct_change().fillna(0)
+        
+        delta = close.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['RSI'] = 100 - (100 / (1 + rs))
+
+        exp1 = close.ewm(span=12, adjust=False).mean()
+        exp2 = close.ewm(span=26, adjust=False).mean()
+        df['MACD'] = exp1 - exp2
+        df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
+        
+        vol = df['Volume']
+        if isinstance(vol, pd.DataFrame): vol = vol.iloc[:, 0]
+        vol = vol.replace(0, 1)
+        df['RVOL'] = vol / vol.rolling(window=20).mean()
+
+        sma_50 = close.rolling(window=50).mean()
+        df['Trend_Score'] = (close - sma_50) / sma_50 
+
+        df = df.dropna()
+        return {'prices': close.values[50:], 'data': df}
+
+    def reset(self):
+        self.current_ticker = random.choice(list(self.stock_data.keys()))
+        dataset = self.stock_data[self.current_ticker]
+        self.prices = dataset['prices']
+        self.df_clean = dataset['data']
+        self.current_step = self.seq_len 
+        self.position = 0
+        self.entry_price = 0
+        self.entry_step = 0
+        self.cash = 10000
+        self.shares = 0
+        self.portfolio_value = 10000
+        return self._next_observation()
+
+    def _next_observation(self):
+        obs_window = self.df_clean.iloc[self.current_step - self.seq_len : self.current_step]
+        sequence = []
+        for i in range(self.seq_len):
+            row = obs_window.iloc[i]
+            def get_val(col): return row[col].iloc[0] if isinstance(row[col], pd.Series) else row[col]
+
+            features = [
+                get_val('Returns') * 100,      
+                get_val('RSI') / 100.0,        
+                get_val('MACD'),               
+                get_val('Signal_Line'),        
+                get_val('Trend_Score') * 10,   
+                get_val('RVOL'),               
+                0.0, 0.0, 0.0,                 
+                float(self.position)           
+            ]
+            sequence.append(features)
+        return np.array(sequence, dtype=np.float32)
+
+    def step(self, action):
+        self.current_step += 1
+        current_price = self.prices[self.current_step]
+        prev_val = self.portfolio_value
+        
+        forced_sell = False
+        if self.position == 1:
+            current_loss_pct = (current_price - self.entry_price) / self.entry_price
+            if current_loss_pct < -0.03: 
+                action = 2 
+                forced_sell = True
+
+        if action == 1 and self.position == 0: 
+            self.position = 1
+            self.shares = self.cash / current_price
+            self.cash = 0
+            self.entry_price = current_price
+            self.entry_step = self.current_step
             
-        final_p = calc_wgt * rate
-        st.info(f"⚖️ Calculated: {calc_wgt:.2f} kg | 💰 Quote: RM {final_p:,.2f}")
+        elif action == 2 and self.position == 1: 
+            self.position = 0
+            self.cash = self.shares * current_price
+            self.shares = 0
+
+        if self.position == 1:
+            self.portfolio_value = self.shares * current_price
+        else:
+            self.portfolio_value = self.cash
+
+        profit_pct = (self.portfolio_value - prev_val) / prev_val * 100
         
-        if st.button("💾 Finalize & Save Quote", disabled=not can_save):
-            new_row = {
-                "Doc_ID": f"QT-{datetime.now().strftime('%y%m%d-%H%M')}", 
-                "Customer": cin, "Product": f"PP {th}x{wd}x{lg}", 
-                "Weight": calc_wgt, "Price": final_p, 
-                "Status": "Pending Approval", "Date": datetime.now().strftime("%Y-%m-%d"), 
-                "Auth_By": auth_lvl, "Sales_Person": sperson, "Payment_Status": "Unpaid"
-            }
-            save_data(pd.concat([q_df, pd.DataFrame([new_row])], ignore_index=True), "QUOTE"); st.rerun()
+        if forced_sell:
+            reward = -10.0 
+        elif profit_pct > 0:
+            reward = profit_pct * 10.0 
+        elif profit_pct < 0:
+            reward = profit_pct * 2.0  
+        else:
+            reward = -0.1 
 
-    st.divider()
-    ca1, ca2 = st.columns(2)
-    with ca1:
-        st.subheader("📋 Approvals")
-        pwd = st.text_input("Authorize Code", type="password")
-        pend = q_df[q_df["Status"] == "Pending Approval"]
-        for i, r in pend.iterrows():
-            st.write(f"**{r['Doc_ID']}** | {r['Sales_Person']}")
-            if (pwd in MANAGERS.values()) or is_boss:
-                if st.button(f"Approve {r['Doc_ID']}", key=f"ap_{i}"):
-                    q_df.at[i, "Status"] = "Approved"; save_data(q_df, "QUOTE"); st.rerun()
-    with ca2:
-        st.subheader("📤 Notifications")
-        appr = q_df[q_df["Status"] == "Approved"]
-        for i, r in appr.iterrows():
-            match = c_df[c_df["Name"] == r["Customer"]]
-            ph = str(match.iloc[0]["Phone"]) if not match.empty else "60123456789"
-            st.link_button(f"WhatsApp {r['Customer']}", f"https://wa.me/{ph}?text=Hi {r['Customer']}, Quote {r['Doc_ID']} for RM {r['Price']:.2f} is ready.")
+        done = False
+        if self.current_step >= len(self.prices) - 2:
+            done = True
+            
+        return self._next_observation(), reward, done, {}
 
-# --- 8. MODULE: SALES FOLLOW-UP ---
-elif menu == "📞 Sales Follow-Up":
-    st.header("📞 Quotation Follow-Up")
-    q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Status", "Sales_Person", "Loss_Reason", "Improvement_Plan"])
-    
-    # Focus on Approved Quotes (Not yet in Production)
-    follow_df = q_df[q_df["Status"] == "Approved"]
-    
-    if follow_df.empty: st.info("No approved quotes currently waiting for customer confirmation.")
-    else:
-        for i, r in follow_df.iterrows():
-            with st.container(border=True):
-                c1, c2, c3 = st.columns([3, 2, 2])
-                c1.write(f"**{r['Customer']}**")
-                c1.caption(f"Sales: {r['Sales_Person']} | Quote: {r['Doc_ID']}")
-                
-                with c2.expander("❌ Mark as Lost"):
-                    reason = st.selectbox("Reason for Failure", ["Price", "Competitor", "Lead Time", "No longer needed"], key=f"rs_{i}")
-                    improve = st.text_area("How to improve?", key=f"im_{i}")
-                    if st.button("Confirm Loss", key=f"lst_{i}"):
-                        idx = q_df[q_df["Doc_ID"] == r["Doc_ID"]].index[0]
-                        q_df.at[idx, "Status"] = "Lost"
-                        q_df.at[idx, "Loss_Reason"] = reason
-                        q_df.at[idx, "Improvement_Plan"] = improve
-                        save_data(q_df, "QUOTE"); st.rerun()
-                
-                if c3.button("🏗️ Send to Production", key=f"win_{i}"):
-                    idx = q_df[q_df["Doc_ID"] == r["Doc_ID"]].index[0]
-                    q_df.at[idx, "Status"] = "In Progress"
-                    save_data(q_df, "QUOTE"); st.rerun()
+# ==========================================
+# 2. LSTM BRAIN
+# ==========================================
+class LSTM_DQN(nn.Module):
+    def __init__(self, input_dim, hidden_dim, action_dim):
+        super(LSTM_DQN, self).__init__()
+        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=hidden_dim, batch_first=True)
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, action_dim)
+        )
+    def forward(self, x):
+        lstm_out, (hn, cn) = self.lstm(x)
+        return self.fc(hn[-1])
 
-# --- 9. MODULE: PRODUCTION ---
-elif menu == "🏭 Production":
-    st.header("🏭 Production Queue")
-    q_df = load_data("QUOTE")
-    active = q_df[q_df["Status"] == "In Progress"]
-    if active.empty: st.info("Production lines are idle.")
-    for i, r in active.iterrows():
-        with st.container(border=True):
-            st.write(f"**{r['Doc_ID']}** | {r['Customer']}")
-            st.caption(f"Product: {r['Product']} | Weight: {r['Weight']}kg")
-            if st.button("✅ Mark Production Finished", key=f"f_{i}"):
-                q_df.at[i, "Status"] = "Completed"; save_data(q_df, "QUOTE"); st.rerun()
-
-# --- 10. MODULE: LOGISTICS ---
-elif menu == "🚚 Logistics":
-    st.header("🚚 Shipping & Logistics")
-    q_df, c_df = load_data("QUOTE"), load_data("CUSTOMER")
-    done = q_df[q_df["Status"] == "Completed"]
-    for i, r in done.iterrows():
-        with st.container(border=True):
-            st.write(f"**{r['Customer']}** - {r['Doc_ID']}")
-            c1, c2 = st.columns(2)
-            c1.download_button("📄 Delivery Order", generate_pdf("DELIVERY ORDER", r, c_df).getvalue(), f"DO_{r['Doc_ID']}.pdf")
-            c2.download_button("💰 Invoice", generate_pdf("INVOICE", r, c_df).getvalue(), f"INV_{r['Doc_ID']}.pdf")
-
-# --- 11. MODULE: PAYMENTS ---
-elif menu == "💰 Payments":
-    st.header("💰 Aging & Collections")
-    q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Price", "Status", "Payment_Status", "Date"])
-    unpaid = q_df[(q_df["Status"] == "Completed") & (q_df["Payment_Status"] != "Paid")].copy()
-    
-    if unpaid.empty: st.success("All collections up to date!")
-    else:
-        unpaid['Date_DT'] = pd.to_datetime(unpaid['Date'], errors='coerce')
-        unpaid['Days'] = (datetime.now() - unpaid['Date_DT']).dt.days
+# ==========================================
+# 3. AGENT
+# ==========================================
+class Agent:
+    def __init__(self, state_dim, action_dim, save_path):
+        self.action_dim = action_dim
+        self.epsilon = 1.0
+        self.epsilon_min = 0.01
+        self.epsilon_decay = 0.995
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.save_path = save_path
         
-        
-        
-        for i, r in unpaid.iterrows():
-            with st.container(border=True):
-                c1, c2, c3 = st.columns([3, 2, 2])
-                if r['Days'] > 30: 
-                    c1.error(f"🚩 {r['Customer']}")
-                    c1.caption(f"**{r['Days']} DAYS OVERDUE**")
-                else: 
-                    c1.write(f"{r['Customer']}")
-                    c1.caption(f"Age: {r['Days']} Days")
-                
-                c2.subheader(f"RM {r['Price']:,.2f}")
-                if c3.button("Confirm Paid", key=f"pay_{i}"):
-                    idx = q_df[q_df["Doc_ID"] == r["Doc_ID"]].index[0]
-                    q_df.at[idx, "Payment_Status"] = "Paid"; save_data(q_df, "QUOTE"); st.rerun()
+        self.policy_net = LSTM_DQN(10, 128, action_dim).to(self.device)
+        self.target_net = LSTM_DQN(10, 128, action_dim).to(self.device)
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=LEARNING_RATE)
+        self.memory = deque(maxlen=MEMORY_SIZE)
+        self.loss_fn = nn.MSELoss()
 
-# --- 12. WAREHOUSE ---
-elif menu == "📦 Warehouse":
-    st.header("📦 Inventory Levels")
-    st.dataframe(load_data("INVENTORY"), use_container_width=True)
+    def act(self, state):
+        if random.random() < self.epsilon:
+            today = state[-1] 
+            rsi = today[1] * 100
+            macd = today[2]
+            signal = today[3]
+            trend = today[4]
+            position = today[9]
+            
+            if position == 0:
+                if trend > 0 and rsi < 65 and macd > signal: return 1 
+            elif position == 1:
+                if macd < signal: return 2 
+            
+            return random.randint(0, self.action_dim - 1)
+
+        state_t = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            return torch.argmax(self.policy_net(state_t)).item()
+
+    def remember(self, state, action, reward, next_state, done):
+        self.memory.append((state, action, reward, next_state, done))
+
+    def replay(self):
+        if len(self.memory) < BATCH_SIZE: return
+        batch = random.sample(self.memory, BATCH_SIZE)
+        state, action, reward, next_state, done = zip(*batch)
+        state = torch.FloatTensor(np.array(state)).to(self.device)
+        action = torch.LongTensor(action).unsqueeze(1).to(self.device)
+        reward = torch.FloatTensor(reward).unsqueeze(1).to(self.device)
+        next_state = torch.FloatTensor(np.array(next_state)).to(self.device)
+        done = torch.FloatTensor(done).unsqueeze(1).to(self.device)
+        current_q = self.policy_net(state).gather(1, action)
+        next_q = self.target_net(next_state).max(1)[0].unsqueeze(1)
+        expected_q = reward + (GAMMA * next_q * (1 - done))
+        loss = self.loss_fn(current_q, expected_q)
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        if self.epsilon > self.epsilon_min: self.epsilon *= self.epsilon_decay
+
+    def save(self):
+        torch.save(self.policy_net.state_dict(), self.save_path)
+
+# ==========================================
+# 4. TRAINING (HIGH VISIBILITY MODE)
+# ==========================================
+print("\n" + "="*50)
+print(f"{C.YELLOW}{C.BOLD} STARTING 'RELATIVE VISION' LSTM V2{C.RESET}")
+print(f"{C.CYAN} Features: Stop Loss (-3%), 30-Day Memory, Normalized Inputs{C.RESET}")
+print("="*50)
+
+env = YahooFinanceEnv(STOCK_LIST, START_DATE, END_DATE, SEQUENCE_LENGTH)
+agent = Agent(10, 3, BRAIN_FILE)
+
+try:
+    episode = 0
+    while True:
+        episode += 1
+        state = env.reset()
+        total_reward = 0
+        done = False
+        
+        while not done:
+            action = agent.act(state)
+            next_state, reward, done, _ = env.step(action)
+            agent.remember(state, action, reward, next_state, done)
+            agent.replay()
+            state = next_state
+            total_reward += reward
+        
+        # --- COLOR CODED LOGGING ---
+        ticker_txt = f"{C.CYAN}{env.current_ticker}{C.RESET}"
+        
+        if total_reward > 0:
+            profit_txt = f"{C.GREEN}{total_reward:.2f}%{C.RESET}"
+        else:
+            profit_txt = f"{C.RED}{total_reward:.2f}%{C.RESET}"
+            
+        if episode % 5 == 0:
+            agent.target_net.load_state_dict(agent.policy_net.state_dict())
+            agent.save()
+            print(f"Ep {episode} | {ticker_txt} | Profit: {profit_txt} | Epsilon: {agent.epsilon:.2f} | {C.GREEN}✅ Saved{C.RESET}")
+        else:
+            print(f"Ep {episode} | {ticker_txt} | Profit: {profit_txt}")
+
+except KeyboardInterrupt:
+    print(f"{C.YELLOW}Training Stopped. Saving...{C.RESET}")
+    agent.save()
