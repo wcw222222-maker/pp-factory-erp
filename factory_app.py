@@ -12,36 +12,57 @@ from reportlab.lib import colors
 # --- 1. THEME & PAGE CONFIG ---
 st.set_page_config(page_title="PP Products ERP", layout="wide", initial_sidebar_state="expanded")
 
-# Custom CSS for Light Blue Theme
+# --- CUSTOM CSS FOR HIGH CONTRAST ---
 st.markdown("""
     <style>
-    /* Main Background */
+    /* 1. Main Background - Light Blue */
     .stApp {
         background-color: #f0f8ff;
     }
-    /* Sidebar Background */
+    
+    /* 2. Sidebar Background - Slightly Darker Blue */
     [data-testid="stSidebar"] {
         background-color: #e1f5fe;
         border-right: 2px solid #b3e5fc;
     }
-    /* Headers */
-    h1, h2, h3 {
-        color: #01579b;
+
+    /* 3. FORCE ALL TEXT TO BLACK (Fixes the White Text Issue) */
+    .stMarkdown, .stText, p, div, span, label, li {
+        color: #000000 !important;
     }
-    /* Buttons */
+
+    /* 4. Headers - Dark Blue for Professional Look */
+    h1, h2, h3, h4, h5, h6 {
+        color: #01579b !important;
+    }
+
+    /* 5. Metrics - Make numbers pop in Blue */
+    [data-testid="stMetricValue"] {
+        color: #0288d1 !important;
+    }
+    
+    /* 6. Metric Labels - Dark Grey */
+    [data-testid="stMetricLabel"] {
+        color: #333333 !important;
+    }
+
+    /* 7. Input Fields - White Background with Black Text */
+    .stTextInput>div>div>input, .stNumberInput>div>div>input, .stSelectbox>div>div>div {
+        background-color: #ffffff !important;
+        color: #000000 !important;
+        border: 1px solid #b3e5fc;
+    }
+
+    /* 8. Buttons - Nice Blue with White Text */
     .stButton>button {
-        background-color: #0288d1;
-        color: white;
+        background-color: #0288d1 !important;
+        color: white !important;
         border-radius: 5px;
         border: none;
     }
     .stButton>button:hover {
-        background-color: #03a9f4;
-        color: white;
-    }
-    /* Metrics */
-    [data-testid="stMetricValue"] {
-        color: #0288d1;
+        background-color: #03a9f4 !important;
+        color: white !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -293,8 +314,6 @@ elif menu == "💰 Payments":
     else:
         unpaid['Date_DT'] = pd.to_datetime(unpaid['Date'], errors='coerce')
         unpaid['Days'] = (datetime.now() - unpaid['Date_DT']).dt.days
-        
-        
         
         for i, r in unpaid.iterrows():
             with st.container(border=True):
