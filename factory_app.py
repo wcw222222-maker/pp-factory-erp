@@ -15,62 +15,18 @@ st.set_page_config(page_title="PP Products ERP", layout="wide", initial_sidebar_
 # --- CUSTOM CSS: ORANGE TEXT MODE ---
 st.markdown("""
     <style>
-    /* 1. Main Background - Light Blue */
-    .stApp {
-        background-color: #f0f8ff;
-    }
-    
-    /* 2. Sidebar Background - Slightly Darker Blue */
-    [data-testid="stSidebar"] {
-        background-color: #e1f5fe;
-        border-right: 2px solid #b3e5fc;
-    }
-
-    /* 3. TOP HEADER BAR - FORCE LIGHT BLUE */
-    header[data-testid="stHeader"] {
-        background-color: #f0f8ff !important;
-    }
-
-    /* 4. FORCE ALL TEXT TO DEEP ORANGE */
-    .stMarkdown, .stText, p, div, span, label, li, h1, h2, h3, h4, h5, h6, b, strong {
-        color: #d84315 !important; /* Deep Burnt Orange */
-    }
-
-    /* 5. Metrics */
-    [data-testid="stMetricValue"] {
-        color: #bf360c !important; 
-    }
-    
-    /* 6. Input Fields - White Background with Orange Text */
+    .stApp { background-color: #f0f8ff; }
+    [data-testid="stSidebar"] { background-color: #e1f5fe; border-right: 2px solid #b3e5fc; }
+    header[data-testid="stHeader"] { background-color: #f0f8ff !important; }
+    .stMarkdown, .stText, p, div, span, label, li, h1, h2, h3, h4, h5, h6, b, strong { color: #d84315 !important; }
+    [data-testid="stMetricValue"] { color: #bf360c !important; }
     .stTextInput>div>div>input, .stNumberInput>div>div>input, .stSelectbox>div>div>div, .stTextArea>div>div>textarea {
-        background-color: #ffffff !important;
-        color: #d84315 !important;
-        border: 2px solid #ffab91; 
+        background-color: #ffffff !important; color: #d84315 !important; border: 2px solid #ffab91;
     }
-
-    /* 7. Buttons - Orange Style */
-    .stButton>button {
-        background-color: #ff5722 !important; 
-        color: white !important;
-        border-radius: 5px;
-        border: none;
-        font-weight: bold;
-    }
-    .stButton>button:hover {
-        background-color: #e64a19 !important; 
-        color: white !important;
-    }
-    
-    /* 8. Success/Error Messages */
-    .stSuccess, .stError, .stInfo {
-        background-color: #ffffff !important;
-        color: #d84315 !important;
-    }
-    
-    /* 9. Tables */
-    div[data-testid="stDataFrame"] div {
-        color: #000000 !important;
-    }
+    .stButton>button { background-color: #ff5722 !important; color: white !important; border-radius: 5px; border: none; font-weight: bold; }
+    .stButton>button:hover { background-color: #e64a19 !important; color: white !important; }
+    .stSuccess, .stError, .stInfo { background-color: #ffffff !important; color: #d84315 !important; }
+    div[data-testid="stDataFrame"] div { color: #000000 !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -84,94 +40,124 @@ def get_db_connection():
         client = gspread.authorize(creds)
         return client.open("PP_ERP_Database")
     except Exception as e:
-        st.error(f"Connection Failed: {e}")
-        return None
+        st.error(f"Connection Failed: {e}"); return None
 
 # --- 3. DATA ENGINE ---
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=5)
 def load_data(sheet_name):
     try:
         client = get_db_connection()
         if not client: return pd.DataFrame()
         ws = client.worksheet(sheet_name)
         return pd.DataFrame(ws.get_all_records())
-    except:
-        return pd.DataFrame()
+    except: return pd.DataFrame()
 
 def save_data(df, sheet_name):
     try:
         client = get_db_connection()
         ws = client.worksheet(sheet_name)
         df = df.fillna("") 
-        ws.clear()
-        ws.update([df.columns.values.tolist()] + df.values.tolist())
+        ws.clear(); ws.update([df.columns.values.tolist()] + df.values.tolist())
         load_data.clear() 
-    except Exception as e:
-        st.error(f"Save Error: {e}")
+    except Exception as e: st.error(f"Save Error: {e}")
 
 def ensure_cols(df, cols):
     if df.empty: return pd.DataFrame(columns=cols)
     for c in cols:
         if c not in df.columns:
-            is_num = any(x in c for x in ["Price", "Weight", "Thick", "Width", "Length"])
+            is_num = any(x in c for x in ["Price", "Weight", "Thick", "Width", "Length", "Current_Weight_kg"])
             df[c] = 0.0 if is_num else ""
     return df
 
-# --- 4. PDF ENGINE ---
+# --- 4. INVENTORY ENGINE (NEW) ---
+def update_inventory(product_name, weight_change, operation):
+    """
+    Updates the INVENTORY sheet.
+    operation: 'ADD' (Production Finish) or 'SUBTRACT' (Shipment)
+    """
+    try:
+        client = get_db_connection()
+        ws = client.worksheet("INVENTORY")
+        data = ws.get_all_records()
+        df = pd.DataFrame(data)
+        
+        # Ensure columns exist
+        if "Product" not in df.columns: df["Product"] = ""
+        if "Current_Weight_kg" not in df.columns: df["Current_Weight_kg"] = 0.0
+        
+        # Clean numeric data
+        df["Current_Weight_kg"] = pd.to_numeric(df["Current_Weight_kg"], errors='coerce').fillna(0.0)
+
+        # Find Product
+        match = df[df["Product"] == product_name]
+        
+        if match.empty:
+            # Create new item if adding
+            if operation == "ADD":
+                new_row = {"Product": product_name, "Current_Weight_kg": float(weight_change), "Last_Updated": datetime.now().strftime("%Y-%m-%d %H:%M")}
+                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+            else:
+                return False, "Product not found in inventory."
+        else:
+            idx = match.index[0]
+            current_w = float(df.at[idx, "Current_Weight_kg"])
+            
+            if operation == "ADD":
+                df.at[idx, "Current_Weight_kg"] = current_w + float(weight_change)
+            elif operation == "SUBTRACT":
+                if current_w < float(weight_change):
+                    return False, f"Not enough stock! Current: {current_w}kg"
+                df.at[idx, "Current_Weight_kg"] = current_w - float(weight_change)
+            
+            df.at[idx, "Last_Updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            
+        save_data(df, "INVENTORY")
+        return True, f"Inventory Updated ({operation})"
+    except Exception as e:
+        return False, str(e)
+
+# --- 5. PDF ENGINE ---
 def generate_pdf(doc_type, data, customer_df):
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
-    
-    # Header Info
     p.setFont("Helvetica-Bold", 16); p.drawString(50, height - 50, "PP PRODUCTS SDN BHD")
     p.setFont("Helvetica", 9); p.drawString(50, height - 65, "28 Jalan Mas Jaya 3, Cheras 43200, Selangor")
     p.line(50, height - 85, width - 50, height - 85)
     
-    # Address Logic
     cust_addr = "No Address Provided"
     if not customer_df.empty:
         match = customer_df[customer_df["Name"] == data['Customer']]
         if not match.empty: cust_addr = str(match.iloc[0].get("Address", "No Address"))
 
-    # Customer Details
     p.setFont("Helvetica-Bold", 11); p.drawString(50, height - 120, "BILL / SHIP TO:")
     p.setFont("Helvetica", 10); p.drawString(50, height - 135, f"{data['Customer']}")
     t = p.beginText(50, height - 150); t.setFont("Helvetica", 9); t.textLines(cust_addr); p.drawText(t)
     
-    # Document Metadata
     p.drawRightString(width - 50, height - 135, f"Date: {data['Date']}")
     p.drawRightString(width - 50, height - 150, f"Ref: {data['Doc_ID']}")
     
-    # Table Header
     y = height - 230
     p.setFillColor(colors.orange); p.rect(50, y, width - 100, 20, fill=1, stroke=0)
     p.setFillColor(colors.black); p.setFont("Helvetica-Bold", 10)
     p.drawString(60, y + 6, "Description"); p.drawString(350, y + 6, "Weight (kg)")
     if doc_type == "INVOICE": p.drawString(480, y + 6, "Total (RM)")
     
-    # Table Content
     y -= 25; p.setFont("Helvetica", 10)
     p.drawString(60, y, f"{data['Product']}"); p.drawString(350, y, f"{data['Weight']:.2f}")
     if doc_type == "INVOICE": p.drawString(480, y, f"{data['Price']:,.2f}")
 
-    # Terms & Conditions Footer
     y_f = 120; p.line(50, y_f, width - 50, y_f)
     p.setFont("Helvetica-Bold", 8); p.drawString(50, y_f - 15, "TERMS & CONDITIONS:")
-    if doc_type == "INVOICE":
-        tc = ["1. Terms: 30 Days.", "2. Overdue: 1.5% interest per month.", "3. Bank: Public Bank 3123-XXXX-XXXX"]
-    else:
-        tc = ["1. Received in good condition.", "2. No claims allowed after signing.", "3. Chop and sign required."]
+    tc = ["1. Terms: 30 Days.", "2. Overdue: 1.5% interest.", "3. Public Bank: 3123-XXXX-XXXX"] if doc_type == "INVOICE" else ["1. Received in good condition.", "2. No claims after signing."]
     y_t = y_f - 25
     for line in tc: p.drawString(50, y_t, line); y_t -= 10
     
-    # Signatures
     p.drawString(50, 50, "_"*30); p.drawString(50, 40, "Authorized Signature")
     p.drawRightString(width - 50, 50, "_"*30); p.drawRightString(width - 50, 40, "Customer Chop & Sign")
-    
     p.save(); return buffer
 
-# --- 5. SIDEBAR ---
+# --- 6. SIDEBAR ---
 with st.sidebar:
     st.title("🛡️ PP ERP ADMIN")
     menu = st.radio("MAIN MENU", ["🏠 Dashboard", "📝 Quote & CRM", "📞 Sales Follow-Up", "🏭 Production", "🚚 Logistics", "💰 Payments", "📦 Warehouse"])
@@ -180,7 +166,7 @@ with st.sidebar:
     is_boss = (boss_pwd == "boss777")
     if is_boss: st.success("🔓 BOSS MODE ACTIVE")
 
-# --- 6. MODULE: DASHBOARD ---
+# --- 7. MODULE: DASHBOARD ---
 if menu == "🏠 Dashboard":
     st.header("🏠 Factory & Sales Dashboard")
     q_df = ensure_cols(load_data("QUOTE"), ["Price", "Status", "Sales_Person", "Payment_Status"])
@@ -188,15 +174,14 @@ if menu == "🏠 Dashboard":
     c1.metric("Total Revenue", f"RM {q_df[q_df['Status']=='Completed']['Price'].sum():,.2f}")
     c2.metric("Uncollected Cash", f"RM {q_df[(q_df['Status']=='Completed') & (q_df['Payment_Status']!='Paid')]['Price'].sum():,.2f}")
     c3.metric("Lead Source", f"Edward ({len(q_df[q_df['Sales_Person']=='Edward'])})", delta=f"Sujita ({len(q_df[q_df['Sales_Person']=='Sujita'])})")
-    
     st.divider(); st.subheader("📊 Sales Force Analytics")
     if not q_df.empty: st.bar_chart(q_df.groupby("Sales_Person")["Price"].sum())
 
-# --- 7. MODULE: QUOTE & CRM (WITH PRINTING) ---
+# --- 8. MODULE: QUOTE & CRM ---
 elif menu == "📝 Quote & CRM":
     st.header("📝 Create Quotation")
     MANAGERS = {"Iris": "iris888", "Tomy": "tomy999"}
-    q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Product", "Weight", "Price", "Status", "Date", "Auth_By", "Sales_Person", "Loss_Reason", "Improvement_Plan", "Payment_Status"])
+    q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Product", "Weight", "Price", "Status", "Date", "Auth_By", "Sales_Person", "Loss_Reason", "Improvement_Plan", "Payment_Status", "Shipped_Status"])
     c_df = ensure_cols(load_data("CUSTOMER"), ["Name", "Phone", "Address"])
 
     with st.expander("👤 Register New Customer"):
@@ -219,38 +204,30 @@ elif menu == "📝 Quote & CRM":
         lg = col3.number_input("Length (mm)", 900.0)
         qty = col4.number_input("Quantity (Pcs)", 1000)
         
-        # 1. Material Calculation
         calc_wgt = (th * wd * lg * 0.91 * qty) / 1000000
         
-        # Smart Pricing Logic
-        suggested_price = 12.60 
-        price_msg = "Standard Rate"
+        # Smart Pricing
+        suggested_price = 12.60; price_msg = "Standard Rate"
         if calc_wgt > 0:
-            if calc_wgt < 10:
-                suggested_price = 36.00; price_msg = "⚠️ Low Volume (<10kg)"
-            elif calc_wgt < 100:
-                suggested_price = 26.00; price_msg = "⚠️ Mid Volume (<100kg)"
+            if calc_wgt < 10: suggested_price = 36.00; price_msg = "⚠️ Low Volume (<10kg)"
+            elif calc_wgt < 100: suggested_price = 26.00; price_msg = "⚠️ Mid Volume (<100kg)"
         
         st.caption(f"Material Pricing: **{price_msg}**")
         mat_rate = st.number_input("Material Price/KG (RM)", value=suggested_price)
         material_total = calc_wgt * mat_rate
 
-        # 2. Silkscreen Printing Logic
-        st.divider()
-        st.subheader("🎨 Silkscreen Printing")
+        # Silkscreen
+        st.divider(); st.subheader("🎨 Silkscreen Printing")
         print_colors = st.number_input("Number of Colors", 0, 10, 0)
         printing_cost = 0.0
-        
         if print_colors > 0:
             film_mold_cost = print_colors * 360.00
             run_cost = print_colors * 0.62 * qty
             printing_cost = film_mold_cost + run_cost
-            st.info(f"🎨 Printing Cost: **RM {printing_cost:,.2f}** (Film/Mold: RM {film_mold_cost} + Run: RM {run_cost:,.2f})")
+            st.info(f"🎨 Print Cost: RM {printing_cost:,.2f}")
         
-        # 3. Final Totals
         grand_total = material_total + printing_cost
         
-        # Validation
         can_save, auth_lvl = True, "Standard"
         min_rate = 12.60
         if calc_wgt < 10: min_rate = 36.00
@@ -258,21 +235,14 @@ elif menu == "📝 Quote & CRM":
         
         if mat_rate < min_rate:
             if is_boss: auth_lvl = "BOSS_BYPASS"; st.warning(f"⚠️ Boss Override Active")
-            else: st.error(f"🚫 Material Price too low (Min RM {min_rate})"); can_save = False
+            else: st.error(f"🚫 Min RM {min_rate}"); can_save = False
             
-        st.success(f"💰 **FINAL QUOTE TOTAL: RM {grand_total:,.2f}**")
+        st.success(f"💰 **TOTAL: RM {grand_total:,.2f}**")
         
         if st.button("💾 Finalize Quote", disabled=not can_save):
             prod_desc = f"PP {th}x{wd}x{lg}"
             if print_colors > 0: prod_desc += f" + {print_colors} Color Print"
-            
-            new_row = {
-                "Doc_ID": f"QT-{datetime.now().strftime('%y%m%d-%H%M')}", 
-                "Customer": cin, "Product": prod_desc, 
-                "Weight": calc_wgt, "Price": grand_total, 
-                "Status": "Pending Approval", "Date": datetime.now().strftime("%Y-%m-%d"), 
-                "Auth_By": auth_lvl, "Sales_Person": sperson, "Payment_Status": "Unpaid"
-            }
+            new_row = {"Doc_ID": f"QT-{datetime.now().strftime('%y%m%d-%H%M')}", "Customer": cin, "Product": prod_desc, "Weight": calc_wgt, "Price": grand_total, "Status": "Pending Approval", "Date": datetime.now().strftime("%Y-%m-%d"), "Auth_By": auth_lvl, "Sales_Person": sperson, "Payment_Status": "Unpaid", "Shipped_Status": "No"}
             save_data(pd.concat([q_df, pd.DataFrame([new_row])], ignore_index=True), "QUOTE"); st.rerun()
 
     st.divider()
@@ -294,7 +264,7 @@ elif menu == "📝 Quote & CRM":
             ph = str(match.iloc[0]["Phone"]) if not match.empty else "60123456789"
             st.link_button(f"WhatsApp {r['Customer']}", f"https://wa.me/{ph}?text=Hi {r['Customer']}, Quote {r['Doc_ID']} for RM {r['Price']:.2f} is ready.")
 
-# --- 8. MODULE: SALES FOLLOW-UP ---
+# --- 9. MODULE: SALES FOLLOW-UP ---
 elif menu == "📞 Sales Follow-Up":
     st.header("📞 Sales Follow-Up")
     q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Status", "Sales_Person", "Loss_Reason", "Improvement_Plan"])
@@ -315,7 +285,7 @@ elif menu == "📞 Sales Follow-Up":
                     idx = q_df[q_df["Doc_ID"] == r["Doc_ID"]].index[0]
                     q_df.at[idx, "Status"] = "In Progress"; save_data(q_df, "QUOTE"); st.rerun()
 
-# --- 9. MODULE: PRODUCTION ---
+# --- 10. MODULE: PRODUCTION (WITH INVENTORY ADD) ---
 elif menu == "🏭 Production":
     st.header("🏭 Production Queue")
     q_df = load_data("QUOTE")
@@ -324,23 +294,58 @@ elif menu == "🏭 Production":
     for i, r in active.iterrows():
         with st.container(border=True):
             st.write(f"**{r['Doc_ID']}** | {r['Customer']}")
-            st.caption(f"{r['Product']}")
-            if st.button("✅ Finish", key=f"f_{i}"):
-                q_df.at[i, "Status"] = "Completed"; save_data(q_df, "QUOTE"); st.rerun()
+            st.caption(f"{r['Product']} | {r['Weight']}kg")
+            
+            # FINISH BUTTON (Adds to Inventory)
+            if st.button("✅ Finish & Add to Stock", key=f"f_{i}"):
+                # 1. Update Inventory
+                success, msg = update_inventory(r['Product'], r['Weight'], "ADD")
+                if success:
+                    st.toast(f"📦 {r['Weight']}kg added to Warehouse!")
+                    # 2. Update Status
+                    q_df.at[i, "Status"] = "Completed"
+                    save_data(q_df, "QUOTE"); time.sleep(1); st.rerun()
+                else:
+                    st.error(f"Inventory Error: {msg}")
 
-# --- 10. MODULE: LOGISTICS ---
+# --- 11. MODULE: LOGISTICS (WITH INVENTORY DEDUCT) ---
 elif menu == "🚚 Logistics":
-    st.header("🚚 Logistics")
-    q_df, c_df = load_data("QUOTE"), load_data("CUSTOMER")
+    st.header("🚚 Logistics & Stock Out")
+    q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Status", "Product", "Weight", "Shipped_Status"])
+    c_df = load_data("CUSTOMER")
+    
+    # Filter for Completed jobs that haven't been shipped (or all completed)
     done = q_df[q_df["Status"] == "Completed"]
+    
     for i, r in done.iterrows():
+        is_shipped = r.get("Shipped_Status") == "Yes"
+        
         with st.container(border=True):
-            st.write(f"**{r['Customer']}** - {r['Doc_ID']}")
-            c1, c2 = st.columns(2)
-            c1.download_button("📄 DO", generate_pdf("DELIVERY ORDER", r, c_df).getvalue(), f"DO_{r['Doc_ID']}.pdf")
-            c2.download_button("💰 INV", generate_pdf("INVOICE", r, c_df).getvalue(), f"INV_{r['Doc_ID']}.pdf")
+            c1, c2, c3 = st.columns([2, 1, 1])
+            c1.write(f"**{r['Customer']}** - {r['Doc_ID']}")
+            c1.caption(f"{r['Product']} | {r['Weight']}kg")
+            if is_shipped: c1.success("✅ SHIPPED")
+            
+            # PDF Buttons
+            with c2:
+                st.download_button("📄 DO", generate_pdf("DELIVERY ORDER", r, c_df).getvalue(), f"DO_{r['Doc_ID']}.pdf")
+                st.download_button("💰 INV", generate_pdf("INVOICE", r, c_df).getvalue(), f"INV_{r['Doc_ID']}.pdf")
+            
+            # Stock Deduct Button
+            with c3:
+                if not is_shipped:
+                    if st.button("🚚 Confirm Shipped", key=f"ship_{i}"):
+                        success, msg = update_inventory(r['Product'], r['Weight'], "SUBTRACT")
+                        if success:
+                            st.toast(f"📉 {r['Weight']}kg deducted from Warehouse!")
+                            q_df.at[i, "Shipped_Status"] = "Yes"
+                            save_data(q_df, "QUOTE"); time.sleep(1); st.rerun()
+                        else:
+                            st.error(msg)
+                else:
+                    st.caption("Stock Deducted")
 
-# --- 11. MODULE: PAYMENTS ---
+# --- 12. MODULE: PAYMENTS ---
 elif menu == "💰 Payments":
     st.header("💰 Aging & Collections")
     q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Price", "Status", "Payment_Status", "Date"])
@@ -361,7 +366,11 @@ elif menu == "💰 Payments":
                     idx = q_df[q_df["Doc_ID"] == r["Doc_ID"]].index[0]
                     q_df.at[idx, "Payment_Status"] = "Paid"; save_data(q_df, "QUOTE"); st.rerun()
 
-# --- 12. WAREHOUSE ---
+# --- 13. WAREHOUSE ---
 elif menu == "📦 Warehouse":
-    st.header("📦 Inventory Levels")
-    st.dataframe(load_data("INVENTORY"), use_container_width=True)
+    st.header("📦 Live Inventory")
+    inv_df = load_data("INVENTORY")
+    if not inv_df.empty:
+        st.dataframe(inv_df, use_container_width=True)
+    else:
+        st.info("Warehouse is empty.")
