@@ -189,8 +189,6 @@ if menu == "🏠 Dashboard":
     c2.metric("Uncollected Cash", f"RM {q_df[(q_df['Status']=='Completed') & (q_df['Payment_Status']!='Paid')]['Price'].sum():,.2f}")
     c3.metric("Lead Source", f"Edward ({len(q_df[q_df['Sales_Person']=='Edward'])})", delta=f"Sujita ({len(q_df[q_df['Sales_Person']=='Sujita'])})")
     
-    [Image of a business dashboard showing revenue charts and printing volume]
-
     st.divider(); st.subheader("📊 Sales Force Analytics")
     if not q_df.empty: st.bar_chart(q_df.groupby("Sales_Person")["Price"].sum())
 
@@ -352,8 +350,6 @@ elif menu == "💰 Payments":
     else:
         unpaid['Date_DT'] = pd.to_datetime(unpaid['Date'], errors='coerce')
         unpaid['Days'] = (datetime.now() - unpaid['Date_DT']).dt.days
-        
-        [Image of financial payment tracking table]
         
         for i, r in unpaid.iterrows():
             with st.container(border=True):
