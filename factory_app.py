@@ -282,8 +282,6 @@ elif menu == "🏭 Production":
     active = q_df[q_df["Status"] == "In Progress"]
     if active.empty: st.info("Lines idle.")
     
-    [Image of production workflow interface]
-    
     for i, r in active.iterrows():
         with st.container(border=True):
             st.write(f"**{r['Doc_ID']}** | {r['Customer']}")
@@ -294,4 +292,148 @@ elif menu == "🏭 Production":
                 if st.form_submit_button("✅ Finish & Calculate Waste"):
                     if real_input >= r['Weight']:
                         waste = real_input - r['Weight']
-                        waste
+                        waste_pct = (waste / real_input) * 100 if real_input > 0 else 0
+                        
+                        if waste_pct > 10: st.error(f"⚠️ HIGH WASTE: {waste_pct:.1f}%")
+                        else: st.success(f"✅ Efficient: {waste_pct:.1f}% Waste")
+                            
+                        success, msg = update_inventory(r['Product'], r['Weight'], "ADD")
+                        if success:
+                            q_df.at[i, "Status"] = "Completed"
+                            q_df.at[i, "Input_Weight"] = real_input
+                            q_df.at[i, "Waste_Kg"] = waste
+                            save_data(q_df, "QUOTE"); time.sleep(2); st.rerun()
+                        else: st.error(msg)
+                    else: st.error("Input must be >= Output")
+
+# --- 11. MODULE: LOGISTICS ---
+elif menu == "🚚 Logistics":
+    st.header("🚚 Logistics")
+    q_df, c_df = load_data("QUOTE"), load_data("CUSTOMER")
+    done = q_df[q_df["Status"] == "Completed"]
+    for i, r in done.iterrows():
+        with st.container(border=True):
+            st.write(f"**{r['Customer']}** - {r['Doc_ID']}")
+            c1, c2 = st.columns(2)
+            c1.download_button("📄 DO", generate_pdf("DELIVERY ORDER", r, c_df).getvalue(), f"DO_{r['Doc_ID']}.pdf")
+            c2.download_button("💰 INV", generate_pdf("INVOICE", r, c_df).getvalue(), f"INV_{r['Doc_ID']}.pdf")
+
+# --- 12. MODULE: PAYMENTS ---
+elif menu == "💰 Payments":
+    st.header("💰 Aging & Collections")
+    q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Price", "Status", "Payment_Status", "Date", "Date_Paid"])
+    unpaid = q_df[(q_df["Status"] == "Completed") & (q_df["Payment_Status"] != "Paid")].copy()
+    
+    if unpaid.empty: st.success("All Paid!")
+    else:
+        unpaid['Date_DT'] = pd.to_datetime(unpaid['Date'], errors='coerce')
+        unpaid['Days'] = (datetime.now() - unpaid['Date_DT']).dt.days
+        
+        for i, r in unpaid.iterrows():
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([3, 2, 2])
+                if r['Days'] > 30: c1.error(f"🚩 {r['Customer']} ({r['Days']} Days)")
+                else: c1.write(f"{r['Customer']} ({r['Days']} Days)")
+                c2.subheader(f"RM {r['Price']:,.2f}")
+                if c3.button("Confirm Paid", key=f"pay_{i}"):
+                    idx = q_df[q_df["Doc_ID"] == r["Doc_ID"]].index[0]
+                    q_df.at[idx, "Payment_Status"] = "Paid"
+                    q_df.at[idx, "Date_Paid"] = datetime.now().strftime("%Y-%m-%d") # RECORD DATE PAID FOR COMMISSION
+                    save_data(q_df, "QUOTE"); st.rerun()
+
+# --- 13. MODULE: COMMISSION ---
+elif menu == "💸 Commission":
+    st.header("💸 Sales Commission Calculator")
+    
+    if not is_boss:
+        st.warning("🔒 Restricted: Boss Only.")
+    else:
+        q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Sales_Person", "Price", "Payment_Status", "Date", "Date_Paid"])
+        paid_df = q_df[q_df["Payment_Status"] == "Paid"].copy()
+        
+        # Calculate Collection Time
+        paid_df['Inv_Date'] = pd.to_datetime(paid_df['Date'], errors='coerce')
+        paid_df['Pay_Date'] = pd.to_datetime(paid_df['Date_Paid'], errors='coerce')
+        paid_df['Days_Taken'] = (paid_df['Pay_Date'] - paid_df['Inv_Date']).dt.days
+        
+        # 1. Penalty Rule (>60 Days = 0%)
+        # 2. Term Rule (>30 Days = Half Commission)
+        
+        def calc_commission_factor(row):
+            if row['Days_Taken'] > 60: return 0.0 # Penalty
+            if row['Days_Taken'] > 30: return 0.5 # Half Comm
+            return 1.0 # Full Comm
+            
+        paid_df['Comm_Factor'] = paid_df.apply(calc_commission_factor, axis=1)
+
+        # --- SUJITA (1.5% Base) ---
+        st.subheader("👩 Sujita (Indoor)")
+        su_df = paid_df[paid_df["Sales_Person"] == "Sujita"].copy()
+        
+        # Sujita Comm = Price * 1.5% * Factor
+        su_df['Commission'] = su_df['Price'] * 0.015 * su_df['Comm_Factor']
+        su_total_comm = su_df['Commission'].sum()
+        
+        c1, c2 = st.columns(2)
+        c1.metric("Total Collected", f"RM {su_df['Price'].sum():,.2f}")
+        c2.metric("Commission Due", f"RM {su_total_comm:,.2f}")
+        with st.expander("Sujita Breakdown"):
+            st.dataframe(su_df[["Doc_ID", "Date", "Days_Taken", "Price", "Comm_Factor", "Commission"]])
+
+        st.divider()
+
+        # --- EDWARD (2.0% Base on Excess > 400k) ---
+        st.subheader("👨 Edward (Outdoor)")
+        ed_df = paid_df[paid_df["Sales_Person"] == "Edward"].copy()
+        
+        # 1. Calculate Total Valid Sales (exclude >60 days penalty)
+        # Note: We include Term sales in the "Volume Count" but pay half rate later
+        valid_sales = ed_df[ed_df['Days_Taken'] <= 60]['Price'].sum()
+        
+        threshold = 400000
+        if valid_sales > threshold:
+            excess_amount = valid_sales - threshold
+            
+            # Weighted Calculation logic:
+            # We calculate what his commission WOULD be on the full amount (factoring in late penalties)
+            # Then we apply that "effective percentage" only to the excess amount.
+            
+            ed_df['Potential_Comm'] = ed_df.apply(lambda x: x['Price'] * 0.02 * x['Comm_Factor'] if x['Days_Taken'] <= 60 else 0, axis=1)
+            total_potential_if_no_threshold = ed_df['Potential_Comm'].sum()
+            
+            # What % of his total sales is actually commissionable?
+            effective_yield = total_potential_if_no_threshold / valid_sales if valid_sales > 0 else 0
+            
+            # Apply that yield to the excess only
+            final_comm = excess_amount * effective_yield
+            
+            c3, c4, c5 = st.columns(3)
+            c3.metric("Valid Sales", f"RM {valid_sales:,.2f}")
+            c4.metric("Excess > 400k", f"RM {excess_amount:,.2f}")
+            c5.metric("Final Commission", f"RM {final_comm:,.2f}")
+            st.success(f"✅ Target Hit! Payout on Excess.")
+        else:
+            c3, c4 = st.columns(2)
+            c3.metric("Valid Sales", f"RM {valid_sales:,.2f}")
+            c4.error(f"❌ Target Missed (<400k)")
+            
+        with st.expander("Edward Breakdown"):
+            st.dataframe(ed_df[["Doc_ID", "Days_Taken", "Price", "Comm_Factor"]])
+
+# --- 14. WAREHOUSE ---
+elif menu == "📦 Warehouse":
+    st.header("📦 Live Inventory")
+    with st.expander("🛠️ Manual Stock Adjustment"):
+        with st.form("man_stock"):
+            st.warning("Manual Adjustment")
+            p_name = st.text_input("Product Name")
+            w_adj = st.number_input("Weight (+/-)", step=10.0)
+            if st.form_submit_button("Update"):
+                if p_name and w_adj != 0:
+                    success, msg = update_inventory(p_name, w_adj, "ADD")
+                    if success: st.success(f"Updated {p_name}"); time.sleep(1); st.rerun()
+                else: st.error("Invalid Input")
+
+    inv_df = load_data("INVENTORY")
+    if not inv_df.empty: st.dataframe(inv_df, use_container_width=True)
+    else: st.info("Empty Warehouse")
