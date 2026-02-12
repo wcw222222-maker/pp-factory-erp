@@ -69,35 +69,27 @@ def ensure_cols(df, cols):
             df[c] = 0.0 if is_num else ""
     return df
 
-# --- 4. INVENTORY ENGINE (NEW) ---
+# --- 4. INVENTORY ENGINE ---
 def update_inventory(product_name, weight_change, operation):
-    """
-    Updates the INVENTORY sheet.
-    operation: 'ADD' (Production Finish) or 'SUBTRACT' (Shipment)
-    """
     try:
         client = get_db_connection()
         ws = client.worksheet("INVENTORY")
         data = ws.get_all_records()
         df = pd.DataFrame(data)
         
-        # Ensure columns exist
         if "Product" not in df.columns: df["Product"] = ""
         if "Current_Weight_kg" not in df.columns: df["Current_Weight_kg"] = 0.0
         
-        # Clean numeric data
         df["Current_Weight_kg"] = pd.to_numeric(df["Current_Weight_kg"], errors='coerce').fillna(0.0)
 
-        # Find Product
         match = df[df["Product"] == product_name]
         
         if match.empty:
-            # Create new item if adding
             if operation == "ADD":
                 new_row = {"Product": product_name, "Current_Weight_kg": float(weight_change), "Last_Updated": datetime.now().strftime("%Y-%m-%d %H:%M")}
                 df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
             else:
-                return False, "Product not found in inventory."
+                return False, "Product not found."
         else:
             idx = match.index[0]
             current_w = float(df.at[idx, "Current_Weight_kg"])
@@ -112,7 +104,7 @@ def update_inventory(product_name, weight_change, operation):
             df.at[idx, "Last_Updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
             
         save_data(df, "INVENTORY")
-        return True, f"Inventory Updated ({operation})"
+        return True, "Updated"
     except Exception as e:
         return False, str(e)
 
@@ -206,7 +198,6 @@ elif menu == "📝 Quote & CRM":
         
         calc_wgt = (th * wd * lg * 0.91 * qty) / 1000000
         
-        # Smart Pricing
         suggested_price = 12.60; price_msg = "Standard Rate"
         if calc_wgt > 0:
             if calc_wgt < 10: suggested_price = 36.00; price_msg = "⚠️ Low Volume (<10kg)"
@@ -216,7 +207,6 @@ elif menu == "📝 Quote & CRM":
         mat_rate = st.number_input("Material Price/KG (RM)", value=suggested_price)
         material_total = calc_wgt * mat_rate
 
-        # Silkscreen
         st.divider(); st.subheader("🎨 Silkscreen Printing")
         print_colors = st.number_input("Number of Colors", 0, 10, 0)
         printing_cost = 0.0
@@ -285,7 +275,7 @@ elif menu == "📞 Sales Follow-Up":
                     idx = q_df[q_df["Doc_ID"] == r["Doc_ID"]].index[0]
                     q_df.at[idx, "Status"] = "In Progress"; save_data(q_df, "QUOTE"); st.rerun()
 
-# --- 10. MODULE: PRODUCTION (WITH INVENTORY ADD) ---
+# --- 10. MODULE: PRODUCTION ---
 elif menu == "🏭 Production":
     st.header("🏭 Production Queue")
     q_df = load_data("QUOTE")
@@ -295,67 +285,46 @@ elif menu == "🏭 Production":
         with st.container(border=True):
             st.write(f"**{r['Doc_ID']}** | {r['Customer']}")
             st.caption(f"{r['Product']} | {r['Weight']}kg")
-            
-            # FINISH BUTTON (Adds to Inventory)
-            if st.button("✅ Finish & Add to Stock", key=f"f_{i}"):
-                # 1. Update Inventory
+            if st.button("✅ Finish & Stock", key=f"f_{i}"):
                 success, msg = update_inventory(r['Product'], r['Weight'], "ADD")
                 if success:
-                    st.toast(f"📦 {r['Weight']}kg added to Warehouse!")
-                    # 2. Update Status
-                    q_df.at[i, "Status"] = "Completed"
-                    save_data(q_df, "QUOTE"); time.sleep(1); st.rerun()
-                else:
-                    st.error(f"Inventory Error: {msg}")
+                    q_df.at[i, "Status"] = "Completed"; save_data(q_df, "QUOTE"); st.rerun()
+                else: st.error(msg)
 
-# --- 11. MODULE: LOGISTICS (WITH INVENTORY DEDUCT) ---
+# --- 11. MODULE: LOGISTICS ---
 elif menu == "🚚 Logistics":
     st.header("🚚 Logistics & Stock Out")
     q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Status", "Product", "Weight", "Shipped_Status"])
     c_df = load_data("CUSTOMER")
-    
-    # Filter for Completed jobs that haven't been shipped (or all completed)
     done = q_df[q_df["Status"] == "Completed"]
-    
     for i, r in done.iterrows():
         is_shipped = r.get("Shipped_Status") == "Yes"
-        
         with st.container(border=True):
             c1, c2, c3 = st.columns([2, 1, 1])
             c1.write(f"**{r['Customer']}** - {r['Doc_ID']}")
             c1.caption(f"{r['Product']} | {r['Weight']}kg")
             if is_shipped: c1.success("✅ SHIPPED")
-            
-            # PDF Buttons
             with c2:
                 st.download_button("📄 DO", generate_pdf("DELIVERY ORDER", r, c_df).getvalue(), f"DO_{r['Doc_ID']}.pdf")
                 st.download_button("💰 INV", generate_pdf("INVOICE", r, c_df).getvalue(), f"INV_{r['Doc_ID']}.pdf")
-            
-            # Stock Deduct Button
             with c3:
                 if not is_shipped:
                     if st.button("🚚 Confirm Shipped", key=f"ship_{i}"):
                         success, msg = update_inventory(r['Product'], r['Weight'], "SUBTRACT")
                         if success:
-                            st.toast(f"📉 {r['Weight']}kg deducted from Warehouse!")
-                            q_df.at[i, "Shipped_Status"] = "Yes"
-                            save_data(q_df, "QUOTE"); time.sleep(1); st.rerun()
-                        else:
-                            st.error(msg)
-                else:
-                    st.caption("Stock Deducted")
+                            q_df.at[i, "Shipped_Status"] = "Yes"; save_data(q_df, "QUOTE"); st.rerun()
+                        else: st.error(msg)
+                else: st.caption("Stock Deducted")
 
 # --- 12. MODULE: PAYMENTS ---
 elif menu == "💰 Payments":
     st.header("💰 Aging & Collections")
     q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Price", "Status", "Payment_Status", "Date"])
     unpaid = q_df[(q_df["Status"] == "Completed") & (q_df["Payment_Status"] != "Paid")].copy()
-    
     if unpaid.empty: st.success("All Paid!")
     else:
         unpaid['Date_DT'] = pd.to_datetime(unpaid['Date'], errors='coerce')
         unpaid['Days'] = (datetime.now() - unpaid['Date_DT']).dt.days
-        
         for i, r in unpaid.iterrows():
             with st.container(border=True):
                 c1, c2, c3 = st.columns([3, 2, 2])
@@ -366,9 +335,22 @@ elif menu == "💰 Payments":
                     idx = q_df[q_df["Doc_ID"] == r["Doc_ID"]].index[0]
                     q_df.at[idx, "Payment_Status"] = "Paid"; save_data(q_df, "QUOTE"); st.rerun()
 
-# --- 13. WAREHOUSE ---
+# --- 13. WAREHOUSE (NEW: MANUAL ADJUSTMENT) ---
 elif menu == "📦 Warehouse":
     st.header("📦 Live Inventory")
+    
+    # NEW: Manual Adjustment Form
+    with st.expander("🛠️ Manual Stock Adjustment"):
+        with st.form("man_stock"):
+            st.warning("Use this to fix errors or add starting stock.")
+            p_name = st.text_input("Product Name (e.g. PP 0.5x650x900)")
+            w_adj = st.number_input("Weight to Add (use negative for subtract)", step=10.0)
+            if st.form_submit_button("Update Stock"):
+                if p_name and w_adj != 0:
+                    success, msg = update_inventory(p_name, w_adj, "ADD") # "ADD" handles both +/- if negative
+                    if success: st.success(f"Updated {p_name} by {w_adj}kg"); time.sleep(1); st.rerun()
+                else: st.error("Enter valid Name and Weight.")
+
     inv_df = load_data("INVENTORY")
     if not inv_df.empty:
         st.dataframe(inv_df, use_container_width=True)
