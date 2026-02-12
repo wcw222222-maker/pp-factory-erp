@@ -65,7 +65,8 @@ def ensure_cols(df, cols):
     if df.empty: return pd.DataFrame(columns=cols)
     for c in cols:
         if c not in df.columns:
-            is_num = any(x in c for x in ["Price", "Weight", "Thick", "Width", "Length", "Current_Weight_kg"])
+            # Added Input_Weight and Waste_Kg to numeric tracking
+            is_num = any(x in c for x in ["Price", "Weight", "Thick", "Width", "Length", "Current_Weight_kg", "Input_Weight", "Waste_Kg"])
             df[c] = 0.0 if is_num else ""
     return df
 
@@ -161,19 +162,24 @@ with st.sidebar:
 # --- 7. MODULE: DASHBOARD ---
 if menu == "🏠 Dashboard":
     st.header("🏠 Factory & Sales Dashboard")
-    q_df = ensure_cols(load_data("QUOTE"), ["Price", "Status", "Sales_Person", "Payment_Status"])
+    q_df = ensure_cols(load_data("QUOTE"), ["Price", "Status", "Sales_Person", "Payment_Status", "Waste_Kg"])
+    
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Revenue", f"RM {q_df[q_df['Status']=='Completed']['Price'].sum():,.2f}")
     c2.metric("Uncollected Cash", f"RM {q_df[(q_df['Status']=='Completed') & (q_df['Payment_Status']!='Paid')]['Price'].sum():,.2f}")
-    c3.metric("Lead Source", f"Edward ({len(q_df[q_df['Sales_Person']=='Edward'])})", delta=f"Sujita ({len(q_df[q_df['Sales_Person']=='Sujita'])})")
-    st.divider(); st.subheader("📊 Sales Force Analytics")
+    
+    # WASTE METRIC (NEW)
+    total_waste = q_df['Waste_Kg'].sum()
+    c3.metric("Total Waste/Regrind", f"{total_waste:,.2f} kg", delta_color="inverse")
+    
+    st.divider(); st.subheader("📊 Sales Analytics")
     if not q_df.empty: st.bar_chart(q_df.groupby("Sales_Person")["Price"].sum())
 
 # --- 8. MODULE: QUOTE & CRM ---
 elif menu == "📝 Quote & CRM":
     st.header("📝 Create Quotation")
     MANAGERS = {"Iris": "iris888", "Tomy": "tomy999"}
-    q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Product", "Weight", "Price", "Status", "Date", "Auth_By", "Sales_Person", "Loss_Reason", "Improvement_Plan", "Payment_Status", "Shipped_Status"])
+    q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Product", "Weight", "Price", "Status", "Date", "Auth_By", "Sales_Person", "Loss_Reason", "Improvement_Plan", "Payment_Status", "Shipped_Status", "Input_Weight", "Waste_Kg"])
     c_df = ensure_cols(load_data("CUSTOMER"), ["Name", "Phone", "Address"])
 
     with st.expander("👤 Register New Customer"):
@@ -232,7 +238,7 @@ elif menu == "📝 Quote & CRM":
         if st.button("💾 Finalize Quote", disabled=not can_save):
             prod_desc = f"PP {th}x{wd}x{lg}"
             if print_colors > 0: prod_desc += f" + {print_colors} Color Print"
-            new_row = {"Doc_ID": f"QT-{datetime.now().strftime('%y%m%d-%H%M')}", "Customer": cin, "Product": prod_desc, "Weight": calc_wgt, "Price": grand_total, "Status": "Pending Approval", "Date": datetime.now().strftime("%Y-%m-%d"), "Auth_By": auth_lvl, "Sales_Person": sperson, "Payment_Status": "Unpaid", "Shipped_Status": "No"}
+            new_row = {"Doc_ID": f"QT-{datetime.now().strftime('%y%m%d-%H%M')}", "Customer": cin, "Product": prod_desc, "Weight": calc_wgt, "Price": grand_total, "Status": "Pending Approval", "Date": datetime.now().strftime("%Y-%m-%d"), "Auth_By": auth_lvl, "Sales_Person": sperson, "Payment_Status": "Unpaid", "Shipped_Status": "No", "Input_Weight": 0, "Waste_Kg": 0}
             save_data(pd.concat([q_df, pd.DataFrame([new_row])], ignore_index=True), "QUOTE"); st.rerun()
 
     st.divider()
@@ -275,56 +281,70 @@ elif menu == "📞 Sales Follow-Up":
                     idx = q_df[q_df["Doc_ID"] == r["Doc_ID"]].index[0]
                     q_df.at[idx, "Status"] = "In Progress"; save_data(q_df, "QUOTE"); st.rerun()
 
-# --- 10. MODULE: PRODUCTION ---
+# --- 10. MODULE: PRODUCTION (WITH WASTE TRACKING) ---
 elif menu == "🏭 Production":
     st.header("🏭 Production Queue")
     q_df = load_data("QUOTE")
     active = q_df[q_df["Status"] == "In Progress"]
     if active.empty: st.info("Lines idle.")
+    
+    
+    
     for i, r in active.iterrows():
         with st.container(border=True):
             st.write(f"**{r['Doc_ID']}** | {r['Customer']}")
-            st.caption(f"{r['Product']} | {r['Weight']}kg")
-            if st.button("✅ Finish & Stock", key=f"f_{i}"):
-                success, msg = update_inventory(r['Product'], r['Weight'], "ADD")
-                if success:
-                    q_df.at[i, "Status"] = "Completed"; save_data(q_df, "QUOTE"); st.rerun()
-                else: st.error(msg)
+            st.caption(f"Target Output: {r['Weight']} kg")
+            
+            # WASTE INPUT
+            with st.form(f"prod_fin_{i}"):
+                real_input = st.number_input("Total Resin Input (kg)", min_value=0.0, step=1.0)
+                
+                if st.form_submit_button("✅ Finish & Calculate Waste"):
+                    if real_input >= r['Weight']:
+                        waste = real_input - r['Weight']
+                        waste_pct = (waste / real_input) * 100 if real_input > 0 else 0
+                        
+                        # ALERTS
+                        if waste_pct > 10:
+                            st.error(f"⚠️ HIGH WASTE: {waste_pct:.1f}% ({waste:.2f} kg Regrind)")
+                        else:
+                            st.success(f"✅ Good Efficiency! Waste: {waste_pct:.1f}%")
+                            
+                        # Save Data
+                        success, msg = update_inventory(r['Product'], r['Weight'], "ADD")
+                        if success:
+                            q_df.at[i, "Status"] = "Completed"
+                            q_df.at[i, "Input_Weight"] = real_input
+                            q_df.at[i, "Waste_Kg"] = waste
+                            save_data(q_df, "QUOTE")
+                            time.sleep(2); st.rerun()
+                        else: st.error(msg)
+                    else:
+                        st.error("Input Weight cannot be less than Output Weight!")
 
 # --- 11. MODULE: LOGISTICS ---
 elif menu == "🚚 Logistics":
-    st.header("🚚 Logistics & Stock Out")
-    q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Status", "Product", "Weight", "Shipped_Status"])
-    c_df = load_data("CUSTOMER")
+    st.header("🚚 Logistics")
+    q_df, c_df = load_data("QUOTE"), load_data("CUSTOMER")
     done = q_df[q_df["Status"] == "Completed"]
     for i, r in done.iterrows():
-        is_shipped = r.get("Shipped_Status") == "Yes"
         with st.container(border=True):
-            c1, c2, c3 = st.columns([2, 1, 1])
-            c1.write(f"**{r['Customer']}** - {r['Doc_ID']}")
-            c1.caption(f"{r['Product']} | {r['Weight']}kg")
-            if is_shipped: c1.success("✅ SHIPPED")
-            with c2:
-                st.download_button("📄 DO", generate_pdf("DELIVERY ORDER", r, c_df).getvalue(), f"DO_{r['Doc_ID']}.pdf")
-                st.download_button("💰 INV", generate_pdf("INVOICE", r, c_df).getvalue(), f"INV_{r['Doc_ID']}.pdf")
-            with c3:
-                if not is_shipped:
-                    if st.button("🚚 Confirm Shipped", key=f"ship_{i}"):
-                        success, msg = update_inventory(r['Product'], r['Weight'], "SUBTRACT")
-                        if success:
-                            q_df.at[i, "Shipped_Status"] = "Yes"; save_data(q_df, "QUOTE"); st.rerun()
-                        else: st.error(msg)
-                else: st.caption("Stock Deducted")
+            st.write(f"**{r['Customer']}** - {r['Doc_ID']}")
+            c1, c2 = st.columns(2)
+            c1.download_button("📄 DO", generate_pdf("DELIVERY ORDER", r, c_df).getvalue(), f"DO_{r['Doc_ID']}.pdf")
+            c2.download_button("💰 INV", generate_pdf("INVOICE", r, c_df).getvalue(), f"INV_{r['Doc_ID']}.pdf")
 
 # --- 12. MODULE: PAYMENTS ---
 elif menu == "💰 Payments":
     st.header("💰 Aging & Collections")
     q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Price", "Status", "Payment_Status", "Date"])
     unpaid = q_df[(q_df["Status"] == "Completed") & (q_df["Payment_Status"] != "Paid")].copy()
+    
     if unpaid.empty: st.success("All Paid!")
     else:
         unpaid['Date_DT'] = pd.to_datetime(unpaid['Date'], errors='coerce')
         unpaid['Days'] = (datetime.now() - unpaid['Date_DT']).dt.days
+        
         for i, r in unpaid.iterrows():
             with st.container(border=True):
                 c1, c2, c3 = st.columns([3, 2, 2])
@@ -335,24 +355,20 @@ elif menu == "💰 Payments":
                     idx = q_df[q_df["Doc_ID"] == r["Doc_ID"]].index[0]
                     q_df.at[idx, "Payment_Status"] = "Paid"; save_data(q_df, "QUOTE"); st.rerun()
 
-# --- 13. WAREHOUSE (NEW: MANUAL ADJUSTMENT) ---
+# --- 13. WAREHOUSE ---
 elif menu == "📦 Warehouse":
     st.header("📦 Live Inventory")
-    
-    # NEW: Manual Adjustment Form
     with st.expander("🛠️ Manual Stock Adjustment"):
         with st.form("man_stock"):
-            st.warning("Use this to fix errors or add starting stock.")
-            p_name = st.text_input("Product Name (e.g. PP 0.5x650x900)")
-            w_adj = st.number_input("Weight to Add (use negative for subtract)", step=10.0)
-            if st.form_submit_button("Update Stock"):
+            st.warning("Manual Adjustment")
+            p_name = st.text_input("Product Name")
+            w_adj = st.number_input("Weight (+/-)", step=10.0)
+            if st.form_submit_button("Update"):
                 if p_name and w_adj != 0:
-                    success, msg = update_inventory(p_name, w_adj, "ADD") # "ADD" handles both +/- if negative
-                    if success: st.success(f"Updated {p_name} by {w_adj}kg"); time.sleep(1); st.rerun()
-                else: st.error("Enter valid Name and Weight.")
+                    success, msg = update_inventory(p_name, w_adj, "ADD")
+                    if success: st.success(f"Updated {p_name}"); time.sleep(1); st.rerun()
+                else: st.error("Invalid Input")
 
     inv_df = load_data("INVENTORY")
-    if not inv_df.empty:
-        st.dataframe(inv_df, use_container_width=True)
-    else:
-        st.info("Warehouse is empty.")
+    if not inv_df.empty: st.dataframe(inv_df, use_container_width=True)
+    else: st.info("Empty Warehouse")
