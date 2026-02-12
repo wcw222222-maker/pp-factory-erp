@@ -15,18 +15,62 @@ st.set_page_config(page_title="PP Products ERP", layout="wide", initial_sidebar_
 # --- CUSTOM CSS: ORANGE TEXT MODE ---
 st.markdown("""
     <style>
-    .stApp { background-color: #f0f8ff; }
-    [data-testid="stSidebar"] { background-color: #e1f5fe; border-right: 2px solid #b3e5fc; }
-    header[data-testid="stHeader"] { background-color: #f0f8ff !important; }
-    .stMarkdown, .stText, p, div, span, label, li, h1, h2, h3, h4, h5, h6, b, strong { color: #d84315 !important; }
-    [data-testid="stMetricValue"] { color: #bf360c !important; }
-    .stTextInput>div>div>input, .stNumberInput>div>div>input, .stSelectbox>div>div>div, .stTextArea>div>div>textarea {
-        background-color: #ffffff !important; color: #d84315 !important; border: 2px solid #ffab91;
+    /* 1. Main Background - Light Blue */
+    .stApp {
+        background-color: #f0f8ff;
     }
-    .stButton>button { background-color: #ff5722 !important; color: white !important; border-radius: 5px; border: none; font-weight: bold; }
-    .stButton>button:hover { background-color: #e64a19 !important; color: white !important; }
-    .stSuccess, .stError, .stInfo { background-color: #ffffff !important; color: #d84315 !important; }
-    div[data-testid="stDataFrame"] div { color: #000000 !important; }
+    
+    /* 2. Sidebar Background - Slightly Darker Blue */
+    [data-testid="stSidebar"] {
+        background-color: #e1f5fe;
+        border-right: 2px solid #b3e5fc;
+    }
+
+    /* 3. TOP HEADER BAR - FORCE LIGHT BLUE */
+    header[data-testid="stHeader"] {
+        background-color: #f0f8ff !important;
+    }
+
+    /* 4. FORCE ALL TEXT TO DEEP ORANGE */
+    .stMarkdown, .stText, p, div, span, label, li, h1, h2, h3, h4, h5, h6, b, strong {
+        color: #d84315 !important; /* Deep Burnt Orange */
+    }
+
+    /* 5. Metrics */
+    [data-testid="stMetricValue"] {
+        color: #bf360c !important; 
+    }
+    
+    /* 6. Input Fields - White Background with Orange Text */
+    .stTextInput>div>div>input, .stNumberInput>div>div>input, .stSelectbox>div>div>div, .stTextArea>div>div>textarea {
+        background-color: #ffffff !important;
+        color: #d84315 !important;
+        border: 2px solid #ffab91; 
+    }
+
+    /* 7. Buttons - Orange Style */
+    .stButton>button {
+        background-color: #ff5722 !important; 
+        color: white !important;
+        border-radius: 5px;
+        border: none;
+        font-weight: bold;
+    }
+    .stButton>button:hover {
+        background-color: #e64a19 !important; 
+        color: white !important;
+    }
+    
+    /* 8. Success/Error Messages */
+    .stSuccess, .stError, .stInfo {
+        background-color: #ffffff !important;
+        color: #d84315 !important;
+    }
+    
+    /* 9. Tables */
+    div[data-testid="stDataFrame"] div {
+        color: #000000 !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -40,7 +84,8 @@ def get_db_connection():
         client = gspread.authorize(creds)
         return client.open("PP_ERP_Database")
     except Exception as e:
-        st.error(f"Connection Failed: {e}"); return None
+        st.error(f"Connection Failed: {e}")
+        return None
 
 # --- 3. DATA ENGINE ---
 @st.cache_data(ttl=10)
@@ -50,16 +95,19 @@ def load_data(sheet_name):
         if not client: return pd.DataFrame()
         ws = client.worksheet(sheet_name)
         return pd.DataFrame(ws.get_all_records())
-    except: return pd.DataFrame()
+    except:
+        return pd.DataFrame()
 
 def save_data(df, sheet_name):
     try:
         client = get_db_connection()
         ws = client.worksheet(sheet_name)
         df = df.fillna("") 
-        ws.clear(); ws.update([df.columns.values.tolist()] + df.values.tolist())
+        ws.clear()
+        ws.update([df.columns.values.tolist()] + df.values.tolist())
         load_data.clear() 
-    except Exception as e: st.error(f"Save Error: {e}")
+    except Exception as e:
+        st.error(f"Save Error: {e}")
 
 def ensure_cols(df, cols):
     if df.empty: return pd.DataFrame(columns=cols)
@@ -74,40 +122,53 @@ def generate_pdf(doc_type, data, customer_df):
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
+    
+    # Header Info
     p.setFont("Helvetica-Bold", 16); p.drawString(50, height - 50, "PP PRODUCTS SDN BHD")
     p.setFont("Helvetica", 9); p.drawString(50, height - 65, "28 Jalan Mas Jaya 3, Cheras 43200, Selangor")
     p.line(50, height - 85, width - 50, height - 85)
     
+    # Address Logic
     cust_addr = "No Address Provided"
     if not customer_df.empty:
         match = customer_df[customer_df["Name"] == data['Customer']]
         if not match.empty: cust_addr = str(match.iloc[0].get("Address", "No Address"))
 
+    # Customer Details
     p.setFont("Helvetica-Bold", 11); p.drawString(50, height - 120, "BILL / SHIP TO:")
     p.setFont("Helvetica", 10); p.drawString(50, height - 135, f"{data['Customer']}")
     t = p.beginText(50, height - 150); t.setFont("Helvetica", 9); t.textLines(cust_addr); p.drawText(t)
     
+    # Document Metadata
     p.drawRightString(width - 50, height - 135, f"Date: {data['Date']}")
     p.drawRightString(width - 50, height - 150, f"Ref: {data['Doc_ID']}")
     
+    # Table Header
     y = height - 230
     p.setFillColor(colors.orange); p.rect(50, y, width - 100, 20, fill=1, stroke=0)
     p.setFillColor(colors.black); p.setFont("Helvetica-Bold", 10)
     p.drawString(60, y + 6, "Description"); p.drawString(350, y + 6, "Weight (kg)")
     if doc_type == "INVOICE": p.drawString(480, y + 6, "Total (RM)")
     
+    # Table Content
     y -= 25; p.setFont("Helvetica", 10)
     p.drawString(60, y, f"{data['Product']}"); p.drawString(350, y, f"{data['Weight']:.2f}")
     if doc_type == "INVOICE": p.drawString(480, y, f"{data['Price']:,.2f}")
 
+    # Terms & Conditions Footer
     y_f = 120; p.line(50, y_f, width - 50, y_f)
     p.setFont("Helvetica-Bold", 8); p.drawString(50, y_f - 15, "TERMS & CONDITIONS:")
-    tc = ["1. Terms: 30 Days.", "2. Overdue: 1.5% interest.", "3. Public Bank: 3123-XXXX-XXXX"] if doc_type == "INVOICE" else ["1. Received in good condition.", "2. No claims after signing."]
+    if doc_type == "INVOICE":
+        tc = ["1. Terms: 30 Days.", "2. Overdue: 1.5% interest per month.", "3. Bank: Public Bank 3123-XXXX-XXXX"]
+    else:
+        tc = ["1. Received in good condition.", "2. No claims allowed after signing.", "3. Chop and sign required."]
     y_t = y_f - 25
     for line in tc: p.drawString(50, y_t, line); y_t -= 10
     
+    # Signatures
     p.drawString(50, 50, "_"*30); p.drawString(50, 40, "Authorized Signature")
     p.drawRightString(width - 50, 50, "_"*30); p.drawRightString(width - 50, 40, "Customer Chop & Sign")
+    
     p.save(); return buffer
 
 # --- 5. SIDEBAR ---
@@ -127,10 +188,13 @@ if menu == "🏠 Dashboard":
     c1.metric("Total Revenue", f"RM {q_df[q_df['Status']=='Completed']['Price'].sum():,.2f}")
     c2.metric("Uncollected Cash", f"RM {q_df[(q_df['Status']=='Completed') & (q_df['Payment_Status']!='Paid')]['Price'].sum():,.2f}")
     c3.metric("Lead Source", f"Edward ({len(q_df[q_df['Sales_Person']=='Edward'])})", delta=f"Sujita ({len(q_df[q_df['Sales_Person']=='Sujita'])})")
+    
+    [Image of a business dashboard showing revenue charts and printing volume]
+
     st.divider(); st.subheader("📊 Sales Force Analytics")
     if not q_df.empty: st.bar_chart(q_df.groupby("Sales_Person")["Price"].sum())
 
-# --- 7. MODULE: QUOTE & CRM (SMART PRICING) ---
+# --- 7. MODULE: QUOTE & CRM (WITH PRINTING) ---
 elif menu == "📝 Quote & CRM":
     st.header("📝 Create Quotation")
     MANAGERS = {"Iris": "iris888", "Tomy": "tomy999"}
@@ -157,45 +221,57 @@ elif menu == "📝 Quote & CRM":
         lg = col3.number_input("Length (mm)", 900.0)
         qty = col4.number_input("Quantity (Pcs)", 1000)
         
-        # Weight Calc
+        # 1. Material Calculation
         calc_wgt = (th * wd * lg * 0.91 * qty) / 1000000
         
-        # --- SMART PRICING LOGIC ---
-        suggested_price = 12.60 # Default
+        # Smart Pricing Logic
+        suggested_price = 12.60 
         price_msg = "Standard Rate"
-        
         if calc_wgt > 0:
             if calc_wgt < 10:
-                suggested_price = 36.00
-                price_msg = "⚠️ Low Volume Surcharge (<10kg)"
+                suggested_price = 36.00; price_msg = "⚠️ Low Volume (<10kg)"
             elif calc_wgt < 100:
-                suggested_price = 26.00
-                price_msg = "⚠️ Mid Volume Rate (<100kg)"
+                suggested_price = 26.00; price_msg = "⚠️ Mid Volume (<100kg)"
         
-        st.caption(f"Pricing Rule Applied: **{price_msg}**")
-        rate = st.number_input("Price/KG (RM)", value=suggested_price)
+        st.caption(f"Material Pricing: **{price_msg}**")
+        mat_rate = st.number_input("Material Price/KG (RM)", value=suggested_price)
+        material_total = calc_wgt * mat_rate
+
+        # 2. Silkscreen Printing Logic
+        st.divider()
+        st.subheader("🎨 Silkscreen Printing")
+        print_colors = st.number_input("Number of Colors", 0, 10, 0)
+        printing_cost = 0.0
         
-        # Validation Logic
+        if print_colors > 0:
+            film_mold_cost = print_colors * 360.00
+            run_cost = print_colors * 0.62 * qty
+            printing_cost = film_mold_cost + run_cost
+            st.info(f"🎨 Printing Cost: **RM {printing_cost:,.2f}** (Film/Mold: RM {film_mold_cost} + Run: RM {run_cost:,.2f})")
+        
+        # 3. Final Totals
+        grand_total = material_total + printing_cost
+        
+        # Validation
         can_save, auth_lvl = True, "Standard"
         min_rate = 12.60
         if calc_wgt < 10: min_rate = 36.00
         elif calc_wgt < 100: min_rate = 26.00
         
-        if rate < min_rate:
-            if is_boss: 
-                auth_lvl = "BOSS_BYPASS"
-                st.warning(f"⚠️ Boss Override: Selling below RM {min_rate}")
-            else: 
-                st.error(f"🚫 Blocked: Minimum rate for this weight is RM {min_rate}"); can_save = False
+        if mat_rate < min_rate:
+            if is_boss: auth_lvl = "BOSS_BYPASS"; st.warning(f"⚠️ Boss Override Active")
+            else: st.error(f"🚫 Material Price too low (Min RM {min_rate})"); can_save = False
             
-        final_p = calc_wgt * rate
-        st.info(f"⚖️ {calc_wgt:.2f} kg | 💰 Total: RM {final_p:,.2f}")
+        st.success(f"💰 **FINAL QUOTE TOTAL: RM {grand_total:,.2f}**")
         
         if st.button("💾 Finalize Quote", disabled=not can_save):
+            prod_desc = f"PP {th}x{wd}x{lg}"
+            if print_colors > 0: prod_desc += f" + {print_colors} Color Print"
+            
             new_row = {
                 "Doc_ID": f"QT-{datetime.now().strftime('%y%m%d-%H%M')}", 
-                "Customer": cin, "Product": f"PP {th}x{wd}x{lg}", 
-                "Weight": calc_wgt, "Price": final_p, 
+                "Customer": cin, "Product": prod_desc, 
+                "Weight": calc_wgt, "Price": grand_total, 
                 "Status": "Pending Approval", "Date": datetime.now().strftime("%Y-%m-%d"), 
                 "Auth_By": auth_lvl, "Sales_Person": sperson, "Payment_Status": "Unpaid"
             }
@@ -250,6 +326,7 @@ elif menu == "🏭 Production":
     for i, r in active.iterrows():
         with st.container(border=True):
             st.write(f"**{r['Doc_ID']}** | {r['Customer']}")
+            st.caption(f"{r['Product']}")
             if st.button("✅ Finish", key=f"f_{i}"):
                 q_df.at[i, "Status"] = "Completed"; save_data(q_df, "QUOTE"); st.rerun()
 
@@ -276,7 +353,7 @@ elif menu == "💰 Payments":
         unpaid['Date_DT'] = pd.to_datetime(unpaid['Date'], errors='coerce')
         unpaid['Days'] = (datetime.now() - unpaid['Date_DT']).dt.days
         
-        
+        [Image of financial payment tracking table]
         
         for i, r in unpaid.iterrows():
             with st.container(border=True):
