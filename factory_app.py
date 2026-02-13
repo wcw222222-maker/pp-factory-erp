@@ -150,7 +150,7 @@ def generate_pdf(doc_type, data, customer_df):
     p.drawRightString(width - 50, 50, "_"*30); p.drawRightString(width - 50, 40, "Customer Chop & Sign")
     p.save(); return buffer
 
-# --- 6. LISA AI LOGIC ---
+# --- 6. MISS PP AI LOGIC ---
 def parse_sales_request(user_text):
     response = {}
     user_text = user_text.lower()
@@ -176,30 +176,33 @@ def parse_sales_request(user_text):
 # --- 7. SIDEBAR ---
 with st.sidebar:
     st.title("🛡️ PP ERP ADMIN")
-    menu = st.radio("MAIN MENU", ["👩‍💼 Ask Lisa", "🏠 Dashboard", "📝 Quote & CRM", "📞 Sales Follow-Up", "🏭 Production", "🚚 Logistics", "💰 Payments", "💸 Commission", "📦 Warehouse"])
+    menu = st.radio("MAIN MENU", ["👩‍💼 Ask Miss PP", "🏠 Dashboard", "📝 Quote & CRM", "📞 Sales Follow-Up", "🏭 Production", "🚚 Logistics", "💰 Payments", "💸 Commission", "📦 Warehouse"])
     st.divider()
     boss_pwd = st.text_input("Boss Override", type="password")
     is_boss = (boss_pwd == "boss777")
     if is_boss: st.success("🔓 BOSS MODE ACTIVE")
 
-# --- 8. MODULE: LISA (AI AGENT) ---
-if menu == "👩‍💼 Ask Lisa":
-    st.header("👩‍💼 Lisa (Virtual Sales Assistant)")
-    user_input = st.text_input("💬 Sujita/Edward, type here (e.g., 'Client needs 2000pcs black sandy 0.6mm'):")
+# --- 8. MODULE: MISS PP (AI AGENT) ---
+if menu == "👩‍💼 Ask Miss PP":
+    st.header("👩‍💼 Ask Miss PP (Virtual Assistant)")
+    st.caption("Tell Miss PP what the customer wants. She will draft the WhatsApp message.")
+    
+    user_input = st.text_input("💬 Type customer request (e.g., '2500pcs black sandy 0.6mm'):")
     
     if user_input:
-        with st.status("👩‍💼 Lisa is calculating..."):
+        with st.status("👩‍💼 Miss PP is calculating..."):
             time.sleep(1) 
             data = parse_sales_request(user_input)
-            wd, lg = 650.0, 900.0 # Default sizes
+            wd, lg = 650.0, 900.0 
             weight = (data['thick'] * wd * lg * 0.91 * data['qty']) / 1000000
             price_rate = 12.60
             if weight < 10: price_rate = 36.00
             elif weight < 100: price_rate = 26.00
             total_price = weight * price_rate
             
+            # --- THE MISS PP PERSONA MESSAGE ---
             whatsapp_msg = (
-                f"Hi there! 👋\n\n"
+                f"Hi Boss! 👋 This is Miss PP (Digital Assistant) for Sujita.\n\n"
                 f"Thank you for inquiring with PP Products.\n"
                 f"Here is the quotation for your request:\n\n"
                 f"📦 *Product:* {data['color']} {data['surface']} Sheet\n"
@@ -208,20 +211,21 @@ if menu == "👩‍💼 Ask Lisa":
                 f"⚖️ *Total Weight:* {weight:.2f} kg\n\n"
                 f"💰 *Total Price:* RM {total_price:,.2f}\n"
                 f"(Rate: RM {price_rate:.2f}/kg)\n\n"
-                f"Let me know if you'd like to proceed with the order! 😊"
+                f"Can we proceed with this order, Boss? 😊"
             )
             
         c1, c2 = st.columns([1, 1])
         with c1:
             st.info("📱 **WhatsApp Draft (Copy & Send):**")
             st.code(whatsapp_msg, language="markdown")
+            st.caption("💡 Tip: Paste this into Sujita's WhatsApp Web.")
         
         with c2:
             st.success(f"**Math Check:**\nWeight: {weight:.2f}kg\nPrice: RM {total_price:,.2f}")
-            if st.button("🚀 Create Official Quote in System"):
+            if st.button("🚀 Create Official Quote"):
                 q_df = load_data("QUOTE")
                 prod_desc = f"PP {data['surface']} {data['color']} {data['thick']}mm x {wd}mm x {lg}mm"
-                new_row = {"Doc_ID": f"QT-{datetime.now().strftime('%y%m%d-%H%M')}", "Customer": "Cash (Lisa)", "Product": prod_desc, "Weight": weight, "Price": total_price, "Status": "Pending Approval", "Date": datetime.now().strftime("%Y-%m-%d"), "Auth_By": "LISA_AI", "Sales_Person": "Sujita", "Payment_Status": "Unpaid", "Shipped_Status": "No", "Input_Weight": 0, "Waste_Kg": 0, "Date_Paid": ""}
+                new_row = {"Doc_ID": f"QT-{datetime.now().strftime('%y%m%d-%H%M')}", "Customer": "Cash (Miss PP)", "Product": prod_desc, "Weight": weight, "Price": total_price, "Status": "Pending Approval", "Date": datetime.now().strftime("%Y-%m-%d"), "Auth_By": "MISS_PP", "Sales_Person": "Sujita", "Payment_Status": "Unpaid", "Shipped_Status": "No", "Input_Weight": 0, "Waste_Kg": 0, "Date_Paid": ""}
                 save_data(pd.concat([q_df, pd.DataFrame([new_row])], ignore_index=True), "QUOTE")
                 st.toast("✅ Official Quote Saved!")
 
@@ -243,11 +247,10 @@ elif menu == "📝 Quote & CRM":
     q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Product", "Weight", "Price", "Status", "Date", "Auth_By", "Sales_Person", "Loss_Reason", "Improvement_Plan", "Payment_Status", "Shipped_Status", "Date_Paid"])
     c_df = ensure_cols(load_data("CUSTOMER"), ["Name", "Phone", "Address"])
 
-    # 1. NEW CUSTOMER - WITH WHATSAPP FIELD
     with st.expander("👤 Register New Customer"):
         with st.form("add_cust", clear_on_submit=True):
             n_name = st.text_input("Company Name")
-            n_phone = st.text_input("WhatsApp (e.g. 60123456789) - No symbols!")
+            n_phone = st.text_input("WhatsApp (e.g. 60123456789)")
             n_addr = st.text_area("Address")
             if st.form_submit_button("Save"):
                 clean_phone = ''.join(filter(str.isdigit, str(n_phone)))
@@ -261,7 +264,6 @@ elif menu == "📝 Quote & CRM":
         cin = c1.selectbox("Select Customer", clist)
         sperson = c2.selectbox("Assigned Sales Person", ["Sujita", "Edward"])
         
-        # 2. WHATSAPP LINK BUTTON
         if cin != "Cash":
             match = c_df[c_df["Name"] == cin]
             if not match.empty:
@@ -269,10 +271,7 @@ elif menu == "📝 Quote & CRM":
                 clean_ph = ''.join(filter(str.isdigit, raw_ph))
                 if clean_ph:
                     st.link_button(f"🟢 Chat with {cin}", f"https://wa.me/{clean_ph}")
-                else:
-                    st.caption("No valid number found.")
 
-        # SURFACE & COLOR
         sc1, sc2 = st.columns(2)
         surf_type = sc1.selectbox("Surface Type", ["Sandy / Emboss", "Sandy / Shining", "Shining / Shining", "Lining / Shining"])
         color_type = sc2.selectbox("Color", ["Silk Nature", "Black", "White", "Special"])
@@ -340,8 +339,6 @@ elif menu == "📝 Quote & CRM":
             match = c_df[c_df["Name"] == r["Customer"]]
             ph = str(match.iloc[0]["Phone"]) if not match.empty else ""
             clean_ph = ''.join(filter(str.isdigit, ph))
-            
-            # 3. NOTIFICATION BUTTON WITH LINK
             if clean_ph:
                 st.link_button(f"WhatsApp {r['Customer']}", f"https://wa.me/{clean_ph}?text=Hi {r['Customer']}, Quote {r['Doc_ID']} for RM {r['Price']:.2f} is ready.")
             else:
