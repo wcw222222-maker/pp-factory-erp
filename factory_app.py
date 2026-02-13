@@ -5,6 +5,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import io
 import time
+import re
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib import colors
@@ -149,17 +150,83 @@ def generate_pdf(doc_type, data, customer_df):
     p.drawRightString(width - 50, 50, "_"*30); p.drawRightString(width - 50, 40, "Customer Chop & Sign")
     p.save(); return buffer
 
-# --- 6. SIDEBAR ---
+# --- 6. LISA AI LOGIC ---
+def parse_sales_request(user_text):
+    response = {}
+    user_text = user_text.lower()
+    
+    qty_match = re.search(r'(\d+)\s*(pcs|pieces|pc)', user_text)
+    response['qty'] = int(qty_match.group(1)) if qty_match else 1000 
+    
+    thick_match = re.search(r'(\d?\.?\d+)\s*(mm)', user_text)
+    response['thick'] = float(thick_match.group(1)) if thick_match else 0.5
+    
+    if "black" in user_text: response['color'] = "Black"
+    elif "white" in user_text: response['color'] = "White"
+    elif "special" in user_text: response['color'] = "Special"
+    else: response['color'] = "Silk Nature"
+    
+    if "emboss" in user_text: response['surface'] = "Sandy / Emboss"
+    elif "lining" in user_text: response['surface'] = "Lining / Shining"
+    elif "shining" in user_text and "sandy" in user_text: response['surface'] = "Sandy / Shining"
+    else: response['surface'] = "Sandy / Emboss" 
+    
+    return response
+
+# --- 7. SIDEBAR ---
 with st.sidebar:
     st.title("🛡️ PP ERP ADMIN")
-    menu = st.radio("MAIN MENU", ["🏠 Dashboard", "📝 Quote & CRM", "📞 Sales Follow-Up", "🏭 Production", "🚚 Logistics", "💰 Payments", "💸 Commission", "📦 Warehouse"])
+    menu = st.radio("MAIN MENU", ["👩‍💼 Ask Lisa", "🏠 Dashboard", "📝 Quote & CRM", "📞 Sales Follow-Up", "🏭 Production", "🚚 Logistics", "💰 Payments", "💸 Commission", "📦 Warehouse"])
     st.divider()
     boss_pwd = st.text_input("Boss Override", type="password")
     is_boss = (boss_pwd == "boss777")
     if is_boss: st.success("🔓 BOSS MODE ACTIVE")
 
-# --- 7. MODULE: DASHBOARD ---
-if menu == "🏠 Dashboard":
+# --- 8. MODULE: LISA (AI AGENT) ---
+if menu == "👩‍💼 Ask Lisa":
+    st.header("👩‍💼 Lisa (Virtual Sales Assistant)")
+    user_input = st.text_input("💬 Sujita/Edward, type here (e.g., 'Client needs 2000pcs black sandy 0.6mm'):")
+    
+    if user_input:
+        with st.status("👩‍💼 Lisa is calculating..."):
+            time.sleep(1) 
+            data = parse_sales_request(user_input)
+            wd, lg = 650.0, 900.0 # Default sizes
+            weight = (data['thick'] * wd * lg * 0.91 * data['qty']) / 1000000
+            price_rate = 12.60
+            if weight < 10: price_rate = 36.00
+            elif weight < 100: price_rate = 26.00
+            total_price = weight * price_rate
+            
+            whatsapp_msg = (
+                f"Hi there! 👋\n\n"
+                f"Thank you for inquiring with PP Products.\n"
+                f"Here is the quotation for your request:\n\n"
+                f"📦 *Product:* {data['color']} {data['surface']} Sheet\n"
+                f"📏 *Size:* {data['thick']}mm x {wd}mm x {lg}mm\n"
+                f"🔢 *Quantity:* {data['qty']} pcs\n"
+                f"⚖️ *Total Weight:* {weight:.2f} kg\n\n"
+                f"💰 *Total Price:* RM {total_price:,.2f}\n"
+                f"(Rate: RM {price_rate:.2f}/kg)\n\n"
+                f"Let me know if you'd like to proceed with the order! 😊"
+            )
+            
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            st.info("📱 **WhatsApp Draft (Copy & Send):**")
+            st.code(whatsapp_msg, language="markdown")
+        
+        with c2:
+            st.success(f"**Math Check:**\nWeight: {weight:.2f}kg\nPrice: RM {total_price:,.2f}")
+            if st.button("🚀 Create Official Quote in System"):
+                q_df = load_data("QUOTE")
+                prod_desc = f"PP {data['surface']} {data['color']} {data['thick']}mm x {wd}mm x {lg}mm"
+                new_row = {"Doc_ID": f"QT-{datetime.now().strftime('%y%m%d-%H%M')}", "Customer": "Cash (Lisa)", "Product": prod_desc, "Weight": weight, "Price": total_price, "Status": "Pending Approval", "Date": datetime.now().strftime("%Y-%m-%d"), "Auth_By": "LISA_AI", "Sales_Person": "Sujita", "Payment_Status": "Unpaid", "Shipped_Status": "No", "Input_Weight": 0, "Waste_Kg": 0, "Date_Paid": ""}
+                save_data(pd.concat([q_df, pd.DataFrame([new_row])], ignore_index=True), "QUOTE")
+                st.toast("✅ Official Quote Saved!")
+
+# --- 9. MODULE: DASHBOARD ---
+elif menu == "🏠 Dashboard":
     st.header("🏠 Factory & Sales Dashboard")
     q_df = ensure_cols(load_data("QUOTE"), ["Price", "Status", "Sales_Person", "Payment_Status"])
     c1, c2, c3 = st.columns(3)
@@ -169,18 +236,22 @@ if menu == "🏠 Dashboard":
     st.divider(); st.subheader("📊 Sales Force Analytics")
     if not q_df.empty: st.bar_chart(q_df.groupby("Sales_Person")["Price"].sum())
 
-# --- 8. MODULE: QUOTE & CRM ---
+# --- 10. MODULE: QUOTE & CRM ---
 elif menu == "📝 Quote & CRM":
     st.header("📝 Create Quotation")
     MANAGERS = {"Iris": "iris888", "Tomy": "tomy999"}
     q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Product", "Weight", "Price", "Status", "Date", "Auth_By", "Sales_Person", "Loss_Reason", "Improvement_Plan", "Payment_Status", "Shipped_Status", "Date_Paid"])
     c_df = ensure_cols(load_data("CUSTOMER"), ["Name", "Phone", "Address"])
 
+    # 1. NEW CUSTOMER - WITH WHATSAPP FIELD
     with st.expander("👤 Register New Customer"):
         with st.form("add_cust", clear_on_submit=True):
-            n_name, n_phone, n_addr = st.text_input("Company Name"), st.text_input("WhatsApp"), st.text_area("Address")
+            n_name = st.text_input("Company Name")
+            n_phone = st.text_input("WhatsApp (e.g. 60123456789) - No symbols!")
+            n_addr = st.text_area("Address")
             if st.form_submit_button("Save"):
-                get_db_connection().worksheet("CUSTOMER").append_row([n_name, "", n_phone, n_addr])
+                clean_phone = ''.join(filter(str.isdigit, str(n_phone)))
+                get_db_connection().worksheet("CUSTOMER").append_row([n_name, "", clean_phone, n_addr])
                 st.success("Saved!"); load_data.clear(); time.sleep(1); st.rerun()
 
     with st.container(border=True):
@@ -190,7 +261,18 @@ elif menu == "📝 Quote & CRM":
         cin = c1.selectbox("Select Customer", clist)
         sperson = c2.selectbox("Assigned Sales Person", ["Sujita", "Edward"])
         
-        # --- NEW: SURFACE & COLOR SELECTION ---
+        # 2. WHATSAPP LINK BUTTON
+        if cin != "Cash":
+            match = c_df[c_df["Name"] == cin]
+            if not match.empty:
+                raw_ph = str(match.iloc[0]["Phone"])
+                clean_ph = ''.join(filter(str.isdigit, raw_ph))
+                if clean_ph:
+                    st.link_button(f"🟢 Chat with {cin}", f"https://wa.me/{clean_ph}")
+                else:
+                    st.caption("No valid number found.")
+
+        # SURFACE & COLOR
         sc1, sc2 = st.columns(2)
         surf_type = sc1.selectbox("Surface Type", ["Sandy / Emboss", "Sandy / Shining", "Shining / Shining", "Lining / Shining"])
         color_type = sc2.selectbox("Color", ["Silk Nature", "Black", "White", "Special"])
@@ -235,11 +317,8 @@ elif menu == "📝 Quote & CRM":
         st.success(f"💰 **TOTAL: RM {grand_total:,.2f}**")
         
         if st.button("💾 Finalize Quote", disabled=not can_save):
-            # --- NEW: AUTO-DESCRIPTION FORMAT ---
-            # Example: "PP Sandy/Emboss Black 0.5mm x 650mm x 900mm + 2 Color Print"
             prod_desc = f"PP {surf_type} {color_type} {th}mm x {wd}mm x {lg}mm"
             if print_colors > 0: prod_desc += f" + {print_colors} Color Print"
-            
             new_row = {"Doc_ID": f"QT-{datetime.now().strftime('%y%m%d-%H%M')}", "Customer": cin, "Product": prod_desc, "Weight": calc_wgt, "Price": grand_total, "Status": "Pending Approval", "Date": datetime.now().strftime("%Y-%m-%d"), "Auth_By": auth_lvl, "Sales_Person": sperson, "Payment_Status": "Unpaid", "Shipped_Status": "No", "Input_Weight": 0, "Waste_Kg": 0, "Date_Paid": ""}
             save_data(pd.concat([q_df, pd.DataFrame([new_row])], ignore_index=True), "QUOTE"); st.rerun()
 
@@ -259,10 +338,16 @@ elif menu == "📝 Quote & CRM":
         appr = q_df[q_df["Status"] == "Approved"]
         for i, r in appr.iterrows():
             match = c_df[c_df["Name"] == r["Customer"]]
-            ph = str(match.iloc[0]["Phone"]) if not match.empty else "60123456789"
-            st.link_button(f"WhatsApp {r['Customer']}", f"https://wa.me/{ph}?text=Hi {r['Customer']}, Quote {r['Doc_ID']} for RM {r['Price']:.2f} is ready.")
+            ph = str(match.iloc[0]["Phone"]) if not match.empty else ""
+            clean_ph = ''.join(filter(str.isdigit, ph))
+            
+            # 3. NOTIFICATION BUTTON WITH LINK
+            if clean_ph:
+                st.link_button(f"WhatsApp {r['Customer']}", f"https://wa.me/{clean_ph}?text=Hi {r['Customer']}, Quote {r['Doc_ID']} for RM {r['Price']:.2f} is ready.")
+            else:
+                st.caption(f"No number for {r['Customer']}")
 
-# --- 9. MODULE: SALES FOLLOW-UP ---
+# --- 11. MODULE: SALES FOLLOW-UP ---
 elif menu == "📞 Sales Follow-Up":
     st.header("📞 Sales Follow-Up")
     q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Status", "Sales_Person", "Loss_Reason", "Improvement_Plan"])
@@ -283,7 +368,7 @@ elif menu == "📞 Sales Follow-Up":
                     idx = q_df[q_df["Doc_ID"] == r["Doc_ID"]].index[0]
                     q_df.at[idx, "Status"] = "In Progress"; save_data(q_df, "QUOTE"); st.rerun()
 
-# --- 10. MODULE: PRODUCTION ---
+# --- 12. MODULE: PRODUCTION ---
 elif menu == "🏭 Production":
     st.header("🏭 Production Queue")
     q_df = load_data("QUOTE")
@@ -293,7 +378,7 @@ elif menu == "🏭 Production":
     for i, r in active.iterrows():
         with st.container(border=True):
             st.write(f"**{r['Doc_ID']}** | {r['Customer']}")
-            st.caption(f"{r['Product']}")
+            st.caption(f"{r['Product']} | Target: {r['Weight']} kg")
             
             with st.form(f"prod_fin_{i}"):
                 real_input = st.number_input("Total Resin Input (kg)", min_value=0.0, step=1.0)
@@ -314,7 +399,7 @@ elif menu == "🏭 Production":
                         else: st.error(msg)
                     else: st.error("Input must be >= Output")
 
-# --- 11. MODULE: LOGISTICS ---
+# --- 13. MODULE: LOGISTICS ---
 elif menu == "🚚 Logistics":
     st.header("🚚 Logistics")
     q_df, c_df = load_data("QUOTE"), load_data("CUSTOMER")
@@ -326,7 +411,7 @@ elif menu == "🚚 Logistics":
             c1.download_button("📄 DO", generate_pdf("DELIVERY ORDER", r, c_df).getvalue(), f"DO_{r['Doc_ID']}.pdf")
             c2.download_button("💰 INV", generate_pdf("INVOICE", r, c_df).getvalue(), f"INV_{r['Doc_ID']}.pdf")
 
-# --- 12. MODULE: PAYMENTS ---
+# --- 14. MODULE: PAYMENTS ---
 elif menu == "💰 Payments":
     st.header("💰 Aging & Collections")
     q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Customer", "Price", "Status", "Payment_Status", "Date", "Date_Paid"])
@@ -346,10 +431,10 @@ elif menu == "💰 Payments":
                 if c3.button("Confirm Paid", key=f"pay_{i}"):
                     idx = q_df[q_df["Doc_ID"] == r["Doc_ID"]].index[0]
                     q_df.at[idx, "Payment_Status"] = "Paid"
-                    q_df.at[idx, "Date_Paid"] = datetime.now().strftime("%Y-%m-%d") # RECORD DATE PAID FOR COMMISSION
+                    q_df.at[idx, "Date_Paid"] = datetime.now().strftime("%Y-%m-%d") # RECORD DATE PAID
                     save_data(q_df, "QUOTE"); st.rerun()
 
-# --- 13. MODULE: COMMISSION ---
+# --- 15. MODULE: COMMISSION ---
 elif menu == "💸 Commission":
     st.header("💸 Sales Commission Calculator")
     
@@ -359,13 +444,9 @@ elif menu == "💸 Commission":
         q_df = ensure_cols(load_data("QUOTE"), ["Doc_ID", "Sales_Person", "Price", "Payment_Status", "Date", "Date_Paid"])
         paid_df = q_df[q_df["Payment_Status"] == "Paid"].copy()
         
-        # Calculate Collection Time
         paid_df['Inv_Date'] = pd.to_datetime(paid_df['Date'], errors='coerce')
         paid_df['Pay_Date'] = pd.to_datetime(paid_df['Date_Paid'], errors='coerce')
         paid_df['Days_Taken'] = (paid_df['Pay_Date'] - paid_df['Inv_Date']).dt.days
-        
-        # 1. Penalty Rule (>60 Days = 0%)
-        # 2. Term Rule (>30 Days = Half Commission)
         
         def calc_commission_factor(row):
             if row['Days_Taken'] > 60: return 0.0 # Penalty
@@ -374,57 +455,38 @@ elif menu == "💸 Commission":
             
         paid_df['Comm_Factor'] = paid_df.apply(calc_commission_factor, axis=1)
 
-        # --- SUJITA (1.5% Base) ---
         st.subheader("👩 Sujita (Indoor)")
         su_df = paid_df[paid_df["Sales_Person"] == "Sujita"].copy()
-        
-        # Sujita Comm = Price * 1.5% * Factor
         su_df['Commission'] = su_df['Price'] * 0.015 * su_df['Comm_Factor']
-        su_total_comm = su_df['Commission'].sum()
         
         c1, c2 = st.columns(2)
         c1.metric("Total Collected", f"RM {su_df['Price'].sum():,.2f}")
-        c2.metric("Commission Due", f"RM {su_total_comm:,.2f}")
-        with st.expander("Sujita Breakdown"):
-            st.dataframe(su_df[["Doc_ID", "Date", "Days_Taken", "Price", "Comm_Factor", "Commission"]])
-
+        c2.metric("Commission", f"RM {su_df['Commission'].sum():,.2f}")
+        
         st.divider()
 
-        # --- EDWARD (2.0% Base on Excess > 400k) ---
         st.subheader("👨 Edward (Outdoor)")
         ed_df = paid_df[paid_df["Sales_Person"] == "Edward"].copy()
-        
-        # 1. Calculate Total Valid Sales (exclude >60 days penalty)
         valid_sales = ed_df[ed_df['Days_Taken'] <= 60]['Price'].sum()
         
         threshold = 400000
         if valid_sales > threshold:
             excess_amount = valid_sales - threshold
-            
-            # Weighted Calculation
             ed_df['Potential_Comm'] = ed_df.apply(lambda x: x['Price'] * 0.02 * x['Comm_Factor'] if x['Days_Taken'] <= 60 else 0, axis=1)
-            total_potential_if_no_threshold = ed_df['Potential_Comm'].sum()
-            
-            # Effective Rate
-            effective_yield = total_potential_if_no_threshold / valid_sales if valid_sales > 0 else 0
-            
-            # Final Commission = Excess * Effective Rate
+            total_potential = ed_df['Potential_Comm'].sum()
+            effective_yield = total_potential / valid_sales if valid_sales > 0 else 0
             final_comm = excess_amount * effective_yield
             
             c3, c4, c5 = st.columns(3)
             c3.metric("Valid Sales", f"RM {valid_sales:,.2f}")
             c4.metric("Excess > 400k", f"RM {excess_amount:,.2f}")
             c5.metric("Final Commission", f"RM {final_comm:,.2f}")
-            st.success(f"✅ Target Hit! Payout on Excess.")
         else:
             c3, c4 = st.columns(2)
             c3.metric("Valid Sales", f"RM {valid_sales:,.2f}")
             c4.error(f"❌ Target Missed (<400k)")
-            
-        with st.expander("Edward Breakdown"):
-            st.dataframe(ed_df[["Doc_ID", "Days_Taken", "Price", "Comm_Factor"]])
 
-# --- 14. WAREHOUSE ---
+# --- 16. WAREHOUSE ---
 elif menu == "📦 Warehouse":
     st.header("📦 Live Inventory")
     with st.expander("🛠️ Manual Stock Adjustment"):
