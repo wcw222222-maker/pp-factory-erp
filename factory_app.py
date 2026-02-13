@@ -190,6 +190,11 @@ elif menu == "📝 Quote & CRM":
         cin = c1.selectbox("Select Customer", clist)
         sperson = c2.selectbox("Assigned Sales Person", ["Sujita", "Edward"])
         
+        # --- NEW: SURFACE & COLOR SELECTION ---
+        sc1, sc2 = st.columns(2)
+        surf_type = sc1.selectbox("Surface Type", ["Sandy / Emboss", "Sandy / Shining", "Shining / Shining", "Lining / Shining"])
+        color_type = sc2.selectbox("Color", ["Silk Nature", "Black", "White", "Special"])
+        
         col1, col2, col3, col4 = st.columns(4)
         th = col1.number_input("Thickness (mm)", 0.50, format="%.2f")
         wd = col2.number_input("Width (mm)", 650.0)
@@ -230,8 +235,11 @@ elif menu == "📝 Quote & CRM":
         st.success(f"💰 **TOTAL: RM {grand_total:,.2f}**")
         
         if st.button("💾 Finalize Quote", disabled=not can_save):
-            prod_desc = f"PP {th}x{wd}x{lg}"
+            # --- NEW: AUTO-DESCRIPTION FORMAT ---
+            # Example: "PP Sandy/Emboss Black 0.5mm x 650mm x 900mm + 2 Color Print"
+            prod_desc = f"PP {surf_type} {color_type} {th}mm x {wd}mm x {lg}mm"
             if print_colors > 0: prod_desc += f" + {print_colors} Color Print"
+            
             new_row = {"Doc_ID": f"QT-{datetime.now().strftime('%y%m%d-%H%M')}", "Customer": cin, "Product": prod_desc, "Weight": calc_wgt, "Price": grand_total, "Status": "Pending Approval", "Date": datetime.now().strftime("%Y-%m-%d"), "Auth_By": auth_lvl, "Sales_Person": sperson, "Payment_Status": "Unpaid", "Shipped_Status": "No", "Input_Weight": 0, "Waste_Kg": 0, "Date_Paid": ""}
             save_data(pd.concat([q_df, pd.DataFrame([new_row])], ignore_index=True), "QUOTE"); st.rerun()
 
@@ -285,7 +293,7 @@ elif menu == "🏭 Production":
     for i, r in active.iterrows():
         with st.container(border=True):
             st.write(f"**{r['Doc_ID']}** | {r['Customer']}")
-            st.caption(f"Target: {r['Weight']} kg")
+            st.caption(f"{r['Product']}")
             
             with st.form(f"prod_fin_{i}"):
                 real_input = st.number_input("Total Resin Input (kg)", min_value=0.0, step=1.0)
@@ -387,24 +395,20 @@ elif menu == "💸 Commission":
         ed_df = paid_df[paid_df["Sales_Person"] == "Edward"].copy()
         
         # 1. Calculate Total Valid Sales (exclude >60 days penalty)
-        # Note: We include Term sales in the "Volume Count" but pay half rate later
         valid_sales = ed_df[ed_df['Days_Taken'] <= 60]['Price'].sum()
         
         threshold = 400000
         if valid_sales > threshold:
             excess_amount = valid_sales - threshold
             
-            # Weighted Calculation logic:
-            # We calculate what his commission WOULD be on the full amount (factoring in late penalties)
-            # Then we apply that "effective percentage" only to the excess amount.
-            
+            # Weighted Calculation
             ed_df['Potential_Comm'] = ed_df.apply(lambda x: x['Price'] * 0.02 * x['Comm_Factor'] if x['Days_Taken'] <= 60 else 0, axis=1)
             total_potential_if_no_threshold = ed_df['Potential_Comm'].sum()
             
-            # What % of his total sales is actually commissionable?
+            # Effective Rate
             effective_yield = total_potential_if_no_threshold / valid_sales if valid_sales > 0 else 0
             
-            # Apply that yield to the excess only
+            # Final Commission = Excess * Effective Rate
             final_comm = excess_amount * effective_yield
             
             c3, c4, c5 = st.columns(3)
