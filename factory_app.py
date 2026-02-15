@@ -13,19 +13,35 @@ from reportlab.lib import colors
 # --- 1. THEME & PAGE CONFIG ---
 st.set_page_config(page_title="PP Products ERP", layout="wide", initial_sidebar_state="expanded")
 
-# --- CUSTOM CSS: ORANGE TEXT MODE ---
+# --- CUSTOM CSS: DARK GREEN BUTTON MODE ---
 st.markdown("""
     <style>
     .stApp { background-color: #f0f8ff; }
     [data-testid="stSidebar"] { background-color: #e1f5fe; border-right: 2px solid #b3e5fc; }
     header[data-testid="stHeader"] { background-color: #f0f8ff !important; }
+    
+    /* Text Colors - Keep Orange Theme for text */
     .stMarkdown, .stText, p, div, span, label, li, h1, h2, h3, h4, h5, h6, b, strong { color: #d84315 !important; }
     [data-testid="stMetricValue"] { color: #bf360c !important; }
+    
+    /* Inputs */
     .stTextInput>div>div>input, .stNumberInput>div>div>input, .stSelectbox>div>div>div, .stTextArea>div>div>textarea {
         background-color: #ffffff !important; color: #d84315 !important; border: 2px solid #ffab91;
     }
-    .stButton>button { background-color: #2e7d32 !important; color: white !important; border-radius: 5px; border: none; font-weight: bold; }
-    .stButton>button:hover { background-color: #e64a19 !important; color: white !important; }
+    
+    /* BUTTONS - DARK GREEN */
+    .stButton>button { 
+        background-color: #2e7d32 !important; 
+        color: white !important; 
+        border-radius: 5px; 
+        border: none; 
+        font-weight: bold; 
+    }
+    .stButton>button:hover { 
+        background-color: #1b5e20 !important; 
+        color: white !important; 
+    }
+    
     .stSuccess, .stError, .stInfo, .stWarning { background-color: #ffffff !important; color: #d84315 !important; }
     div[data-testid="stDataFrame"] div { color: #000000 !important; }
     </style>
@@ -187,7 +203,12 @@ if menu == "👩‍💼 Ask Miss PP":
     st.header("👩‍💼 Ask Miss PP (Virtual Assistant)")
     st.caption("Tell Miss PP what the customer wants. She will draft the WhatsApp message.")
     
-    user_input = st.text_input(("key="pp_input_key"💬 Type customer request (e.g., '2500pcs black sandy 0.6mm'):") remember
+    # Initialize session state for input to allow clearing it later
+    if "pp_input_key" not in st.session_state:
+        st.session_state["pp_input_key"] = ""
+
+    # Input Box with Memory Key
+    user_input = st.text_input("💬 Type customer request (e.g., '2500pcs black sandy 0.6mm'):", key="pp_input_key")
     
     if user_input:
         with st.status("👩‍💼 Miss PP is calculating..."):
@@ -222,12 +243,17 @@ if menu == "👩‍💼 Ask Miss PP":
         
         with c2:
             st.success(f"**Math Check:**\nWeight: {weight:.2f}kg\nPrice: RM {total_price:,.2f}")
+            
             if st.button("🚀 Create Official Quote"):
                 q_df = load_data("QUOTE")
                 prod_desc = f"PP {data['surface']} {data['color']} {data['thick']}mm x {wd}mm x {lg}mm"
                 new_row = {"Doc_ID": f"QT-{datetime.now().strftime('%y%m%d-%H%M')}", "Customer": "Cash (Miss PP)", "Product": prod_desc, "Weight": weight, "Price": total_price, "Status": "Pending Approval", "Date": datetime.now().strftime("%Y-%m-%d"), "Auth_By": "MISS_PP", "Sales_Person": "Sujita", "Payment_Status": "Unpaid", "Shipped_Status": "No", "Input_Weight": 0, "Waste_Kg": 0, "Date_Paid": ""}
                 save_data(pd.concat([q_df, pd.DataFrame([new_row])], ignore_index=True), "QUOTE")
-                st.toast("✅ Official Quote Saved!"),if st.button("🚀 Create Official Quote")
+                
+                st.toast("✅ Official Quote Saved!")
+                time.sleep(1)
+                st.empty() # Clears the input box
+                st.rerun() # Refreshes the page
 
 # --- 9. MODULE: DASHBOARD ---
 elif menu == "🏠 Dashboard":
@@ -500,8 +526,3 @@ elif menu == "📦 Warehouse":
     inv_df = load_data("INVENTORY")
     if not inv_df.empty: st.dataframe(inv_df, use_container_width=True)
     else: st.info("Empty Warehouse")
-
-
-
-
-
