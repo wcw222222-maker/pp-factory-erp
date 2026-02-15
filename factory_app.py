@@ -227,7 +227,7 @@ if menu == "👩‍💼 Ask Miss PP":
                 prod_desc = f"PP {data['surface']} {data['color']} {data['thick']}mm x {wd}mm x {lg}mm"
                 new_row = {"Doc_ID": f"QT-{datetime.now().strftime('%y%m%d-%H%M')}", "Customer": "Cash (Miss PP)", "Product": prod_desc, "Weight": weight, "Price": total_price, "Status": "Pending Approval", "Date": datetime.now().strftime("%Y-%m-%d"), "Auth_By": "MISS_PP", "Sales_Person": "Sujita", "Payment_Status": "Unpaid", "Shipped_Status": "No", "Input_Weight": 0, "Waste_Kg": 0, "Date_Paid": ""}
                 save_data(pd.concat([q_df, pd.DataFrame([new_row])], ignore_index=True), "QUOTE")
-                st.toast("✅ Official Quote Saved!")
+                st.toast("✅ Official Quote Saved!"),if st.button("🚀 Create Official Quote")
 
 # --- 9. MODULE: DASHBOARD ---
 elif menu == "🏠 Dashboard":
@@ -500,6 +500,7 @@ elif menu == "📦 Warehouse":
     inv_df = load_data("INVENTORY")
     if not inv_df.empty: st.dataframe(inv_df, use_container_width=True)
     else: st.info("Empty Warehouse")
+
 
 
 
