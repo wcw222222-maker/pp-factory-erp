@@ -24,7 +24,7 @@ st.markdown("""
     .stTextInput>div>div>input, .stNumberInput>div>div>input, .stSelectbox>div>div>div, .stTextArea>div>div>textarea {
         background-color: #ffffff !important; color: #d84315 !important; border: 2px solid #ffab91;
     }
-    .stButton>button { background-color: #ff5722 !important; color: white !important; border-radius: 5px; border: none; font-weight: bold; }
+    .stButton>button { background-color: #2e7d32 !important; color: white !important; border-radius: 5px; border: none; font-weight: bold; }
     .stButton>button:hover { background-color: #e64a19 !important; color: white !important; }
     .stSuccess, .stError, .stInfo, .stWarning { background-color: #ffffff !important; color: #d84315 !important; }
     div[data-testid="stDataFrame"] div { color: #000000 !important; }
@@ -500,3 +500,4 @@ elif menu == "📦 Warehouse":
     inv_df = load_data("INVENTORY")
     if not inv_df.empty: st.dataframe(inv_df, use_container_width=True)
     else: st.info("Empty Warehouse")
+
