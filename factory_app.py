@@ -166,10 +166,15 @@ def generate_pdf(doc_type, data, customer_df):
     p.drawRightString(width - 50, 50, "_"*30); p.drawRightString(width - 50, 40, "Customer Chop & Sign")
     p.save(); return buffer
 
-# --- 6. MISS PP AI LOGIC ---
+# --- 6. MISS PP AI LOGIC (SMARTER VERSION) ---
 def parse_sales_request(user_text):
-    response = {}
     user_text = user_text.lower()
+    
+    # 1. SMART CHECK: If no numbers at all, return None (it's likely just chat)
+    if not re.search(r'\d', user_text):
+        return None
+
+    response = {}
     
     qty_match = re.search(r'(\d+)\s*(pcs|pieces|pc)', user_text)
     response['qty'] = int(qty_match.group(1)) if qty_match else 1000 
@@ -198,7 +203,7 @@ with st.sidebar:
     is_boss = (boss_pwd == "boss777")
     if is_boss: st.success("🔓 BOSS MODE ACTIVE")
 
-# --- 8. MODULE: MISS PP (AI CHAT AGENT) ---
+# --- 8. MODULE: MISS PP (SMART CHAT AGENT) ---
 if menu == "👩‍💼 Ask Miss PP":
     st.header("👩‍💼 Chat with Miss PP")
     st.caption("Type your request below like you are talking to Sujita.")
@@ -214,7 +219,7 @@ if menu == "👩‍💼 Ask Miss PP":
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # 3. The "Save Quote" Action Area (Appears if a quote is ready)
+    # 3. The "Save Quote" Action Area (Appears ONLY if a quote is ready)
     if st.session_state.latest_quote:
         with st.container(border=True):
             c1, c2 = st.columns([2, 1])
@@ -243,7 +248,7 @@ if menu == "👩‍💼 Ask Miss PP":
                 time.sleep(1)
                 st.rerun()
 
-    # 4. The Chat Input Box (The "Blackbox")
+    # 4. The Chat Input Box
     if prompt := st.chat_input("Type request (e.g. '2000pcs 0.5mm black sandy'):"):
         
         # A. Show User Message
@@ -253,45 +258,61 @@ if menu == "👩‍💼 Ask Miss PP":
 
         # B. Miss PP Thinks & Replies
         with st.chat_message("assistant"):
-            with st.spinner("Miss PP is calculating..."):
-                time.sleep(0.5) # Fake thinking time
+            with st.spinner("Miss PP is thinking..."):
+                time.sleep(0.5) 
                 
                 # --- LOGIC ENGINE ---
                 data = parse_sales_request(prompt)
-                wd, lg = 650.0, 900.0
-                weight = (data['thick'] * wd * lg * 0.91 * data['qty']) / 1000000
-                price_rate = 12.60
-                if weight < 10: price_rate = 36.00
-                elif weight < 100: price_rate = 26.00
-                total_price = weight * price_rate
                 
-                # Format the response
-                prod_desc = f"PP {data['surface']} {data['color']} {data['thick']}mm x {wd}mm x {lg}mm"
-                
-                response_text = (
-                    f"**Quote Generated!** 📝\n\n"
-                    f"📦 **Product:** {data['color']} {data['surface']}\n"
-                    f"📏 **Specs:** {data['thick']}mm x {wd}mm x {lg}mm\n"
-                    f"🔢 **Qty:** {data['qty']} pcs\n"
-                    f"⚖️ **Weight:** {weight:.2f} kg\n"
-                    f"💰 **Total:** RM {total_price:,.2f} (Rate: RM {price_rate:.2f}/kg)\n\n"
-                    f"*WhatsApp Draft (Copy & Send):*\n"
-                    f"```\nHi Boss! Quote for {data['qty']}pcs {data['thick']}mm is RM {total_price:,.2f}. Proceed?\n```"
-                )
-                
-                st.markdown(response_text)
-                
-                # Save context for the button
-                st.session_state.latest_quote = {
-                    "desc": prod_desc,
-                    "weight": weight,
-                    "total_price": total_price,
-                    "qty": data['qty']
-                }
-                
-        # C. Save History
-        st.session_state.messages.append({"role": "assistant", "content": response_text})
-        st.rerun() # Refresh to show the Save Button immediately
+                # CASE 1: No data found (Just Chatting)
+                if data is None:
+                    # Simple keyword check for greetings
+                    greetings = ["hi", "hello", "hey", "morning", "afternoon", "boss"]
+                    thanks = ["thanks", "thank", "ok", "yes", "proceed", "good"]
+                    
+                    if any(x in prompt.lower() for x in greetings):
+                        response_text = "Hello Boss! 👋 ready to create a quote. Just type something like '2000pcs 0.5mm'."
+                    elif any(x in prompt.lower() for x in thanks):
+                        response_text = "You're welcome Boss! 😊 Anything else?"
+                    else:
+                        response_text = "😅 I didn't see any quantity or size there. Could you type it again? (e.g. '1500pcs 0.6mm')"
+                    
+                    st.markdown(response_text)
+                    st.session_state.messages.append({"role": "assistant", "content": response_text})
+
+                # CASE 2: Data Found (Calculate Quote)
+                else:
+                    wd, lg = 650.0, 900.0
+                    weight = (data['thick'] * wd * lg * 0.91 * data['qty']) / 1000000
+                    price_rate = 12.60
+                    if weight < 10: price_rate = 36.00
+                    elif weight < 100: price_rate = 26.00
+                    total_price = weight * price_rate
+                    
+                    prod_desc = f"PP {data['surface']} {data['color']} {data['thick']}mm x {wd}mm x {lg}mm"
+                    
+                    response_text = (
+                        f"**Quote Generated!** 📝\n\n"
+                        f"📦 **Product:** {data['color']} {data['surface']}\n"
+                        f"📏 **Specs:** {data['thick']}mm x {wd}mm x {lg}mm\n"
+                        f"🔢 **Qty:** {data['qty']} pcs\n"
+                        f"⚖️ **Weight:** {weight:.2f} kg\n"
+                        f"💰 **Total:** RM {total_price:,.2f} (Rate: RM {price_rate:.2f}/kg)\n\n"
+                        f"*WhatsApp Draft (Copy & Send):*\n"
+                        f"```\nHi Boss! Quote for {data['qty']}pcs {data['thick']}mm is RM {total_price:,.2f}. Proceed?\n```"
+                    )
+                    
+                    st.markdown(response_text)
+                    st.session_state.messages.append({"role": "assistant", "content": response_text})
+                    
+                    # Enable the Save Button
+                    st.session_state.latest_quote = {
+                        "desc": prod_desc,
+                        "weight": weight,
+                        "total_price": total_price,
+                        "qty": data['qty']
+                    }
+                    st.rerun() # Refresh to show button
 
 # --- 9. MODULE: DASHBOARD ---
 elif menu == "🏠 Dashboard":
