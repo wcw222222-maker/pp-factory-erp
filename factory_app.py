@@ -187,7 +187,7 @@ if menu == "👩‍💼 Ask Miss PP":
     st.header("👩‍💼 Ask Miss PP (Virtual Assistant)")
     st.caption("Tell Miss PP what the customer wants. She will draft the WhatsApp message.")
     
-    user_input = st.text_input("💬 Type customer request (e.g., '2500pcs black sandy 0.6mm'):")
+    user_input = st.text_input("💬 Type customer request (e.g., '2500pcs black sandy 0.6mm'):") remember
     
     if user_input:
         with st.status("👩‍💼 Miss PP is calculating..."):
@@ -500,4 +500,5 @@ elif menu == "📦 Warehouse":
     inv_df = load_data("INVENTORY")
     if not inv_df.empty: st.dataframe(inv_df, use_container_width=True)
     else: st.info("Empty Warehouse")
+
 
