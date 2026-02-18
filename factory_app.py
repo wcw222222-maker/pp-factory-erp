@@ -1,4 +1,6 @@
 import streamlit as st
+import smtplib
+from email.mime.text import MIMEText
 import pandas as pd
 from datetime import datetime
 import gspread
@@ -9,6 +11,41 @@ import re
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib import colors
+
+def send_waste_alert(doc_id, customer, waste_pct, real_input, target_weight):
+    """Sends an email to the Boss if waste is too high."""
+    try:
+        # Get credentials from your Streamlit Secrets
+        sender_email = st.secrets["email"]["user"]
+        sender_password = st.secrets["email"]["password"]
+        receiver_email = st.secrets["email"]["receiver"] # Your email
+
+        subject = f"🚨 HIGH WASTE ALERT: {doc_id} ({customer})"
+        body = f"""
+        Boss, we have a high waste issue in production!
+        
+        Ref: {doc_id}
+        Customer: {customer}
+        Target Weight: {target_weight:.2f} kg
+        Actual Input: {real_input:.2f} kg
+        -----------------------------------
+        WASTE PERCENTAGE: {waste_pct:.1f}% 🚩
+        
+        Please check Machine/Operator settings.
+        """
+
+        msg = MIMEText(body)
+        msg['Subject'] = subject
+        msg['From'] = sender_email
+        msg['To'] = receiver_email
+
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, [receiver_email], msg.as_string())
+        return True
+    except Exception as e:
+        st.error(f"Email Alert Failed: {e}")
+        return False
 
 # --- 1. THEME & PAGE CONFIG ---
 st.set_page_config(page_title="PP Products ERP", layout="wide", initial_sidebar_state="expanded")
@@ -231,6 +268,7 @@ def parse_sales_request(user_text):
     else: response['surface'] = "Sandy / Emboss" 
     
     return response
+
 # --- 7. SIDEBAR ---
 with st.sidebar:
     st.title("🛡️ PP ERP ADMIN")
@@ -311,6 +349,7 @@ if menu == "👩‍💼 Ask Miss PP":
                         fail_msg = "😅 I'm just a humble bot, I didn't understand that. Try asking about **Price**, **Recommendations**, or give me a **Qty** to calculate!"
                         st.markdown(fail_msg)
                         st.session_state.messages.append({"role": "assistant", "content": fail_msg})
+
 # --- 9. MODULE: DASHBOARD ---
 elif menu == "🏠 Dashboard":
     st.header("🏠 Factory & Sales Dashboard")
@@ -452,7 +491,9 @@ elif menu == "🏭 Production":
     st.header("🏭 Production Queue")
     q_df = load_data("QUOTE")
     active = q_df[q_df["Status"] == "In Progress"]
-    if active.empty: st.info("Lines idle.")
+    
+    if active.empty:
+        st.info("Lines idle. No active production orders.")
     
     for i, r in active.iterrows():
         with st.container(border=True):
@@ -463,20 +504,30 @@ elif menu == "🏭 Production":
                 real_input = st.number_input("Total Resin Input (kg)", min_value=0.0, step=1.0)
                 if st.form_submit_button("✅ Finish & Calculate Waste"):
                     if real_input >= r['Weight']:
+                        # WASTE CALCULATION
                         waste = real_input - r['Weight']
                         waste_pct = (waste / real_input) * 100 if real_input > 0 else 0
                         
-                        if waste_pct > 10: st.error(f"⚠️ HIGH WASTE: {waste_pct:.1f}%")
-                        else: st.success(f"✅ Efficient: {waste_pct:.1f}% Waste")
+                        # TRIGGER ALERT IF WASTE > 10%
+                        if waste_pct > 10:
+                            st.error(f"⚠️ HIGH WASTE: {waste_pct:.1f}%")
+                            send_waste_alert(r['Doc_ID'], r['Customer'], waste_pct, real_input, r['Weight'])
+                            st.warning("📩 High waste alert sent to Boss.")
+                        else:
+                            st.success(f"✅ Efficient Production: {waste_pct:.1f}% Waste")
                             
                         success, msg = update_inventory(r['Product'], r['Weight'], "ADD")
                         if success:
                             q_df.at[i, "Status"] = "Completed"
                             q_df.at[i, "Input_Weight"] = real_input
                             q_df.at[i, "Waste_Kg"] = waste
-                            save_data(q_df, "QUOTE"); time.sleep(2); st.rerun()
-                        else: st.error(msg)
-                    else: st.error("Input must be >= Output")
+                            save_data(q_df, "QUOTE")
+                            time.sleep(2)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    else:
+                        st.error("Input must be at least the target weight!")
 
 # --- 13. MODULE: LOGISTICS ---
 elif menu == "🚚 Logistics":
