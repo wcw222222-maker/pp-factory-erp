@@ -47,6 +47,52 @@ def send_waste_alert(doc_id, customer, waste_pct, real_input, target_weight):
         st.error(f"Email Alert Failed: {e}")
         return False
 
+def send_daily_summary(q_df):
+    """Calculates today's metrics and sends an end-of-day email to the Boss."""
+    try:
+        sender_email = st.secrets["email"]["user"]
+        sender_password = st.secrets["email"]["password"]
+        receivers_str = st.secrets["email"]["receiver"]
+        receiver_list = [email.strip() for email in receivers_str.split(",")]
+
+        # Get today's date
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        
+        # Filter the data for TODAY
+        today_quotes = q_df[q_df["Date"] == today_str]
+        today_paid = q_df[q_df["Date_Paid"] == today_str]
+        
+        # Calculate Math
+        new_sales = today_quotes[today_quotes["Status"] != "Lost"]["Price"].sum()
+        collected_cash = today_paid["Price"].sum()
+        quotes_count = len(today_quotes)
+        
+        subject = f"📊 Daily Sales Summary: {today_str}"
+        body = f"""
+        Boss, here is the End of Day Report for PP Products SDN BHD ({today_str}):
+        
+        💰 TOTAL NEW SALES (Generated Today): RM {new_sales:,.2f}
+        📝 TOTAL QUOTES CREATED: {quotes_count}
+        
+        💵 TOTAL CASH COLLECTED TODAY: RM {collected_cash:,.2f}
+        
+        Have a great evening!
+        Miss PP 👩‍💼
+        """
+
+        msg = MIMEText(body)
+        msg['Subject'] = subject
+        msg['From'] = sender_email
+        msg['To'] = ", ".join(receiver_list)
+
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, receiver_list, msg.as_string())
+        return True
+    except Exception as e:
+        st.error(f"Daily Summary Failed: {e}")
+        return False
+
 # --- 1. THEME & PAGE CONFIG ---
 st.set_page_config(page_title="PP Products ERP", layout="wide", initial_sidebar_state="expanded")
 
@@ -353,15 +399,29 @@ if menu == "👩‍💼 Ask Miss PP":
 # --- 9. MODULE: DASHBOARD ---
 elif menu == "🏠 Dashboard":
     st.header("🏠 Factory & Sales Dashboard")
-    q_df = ensure_cols(load_data("QUOTE"), ["Price", "Status", "Sales_Person", "Payment_Status"])
+    # Make sure we load the Date and Date_Paid columns!
+    q_df = ensure_cols(load_data("QUOTE"), ["Price", "Status", "Sales_Person", "Payment_Status", "Date", "Date_Paid"])
+    
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Revenue", f"RM {q_df[q_df['Status']=='Completed']['Price'].sum():,.2f}")
     c2.metric("Uncollected Cash", f"RM {q_df[(q_df['Status']=='Completed') & (q_df['Payment_Status']!='Paid')]['Price'].sum():,.2f}")
     c3.metric("Lead Source", f"Edward ({len(q_df[q_df['Sales_Person']=='Edward'])})", delta=f"Sujita ({len(q_df[q_df['Sales_Person']=='Sujita'])})")
-    st.divider(); st.subheader("📊 Sales Force Analytics")
-    if not q_df.empty: st.bar_chart(q_df.groupby("Sales_Person")["Price"].sum())
+    
+    st.divider()
+    
+    # --- 🚨 NEW: BOSS ONLY DAILY SUMMARY BUTTON ---
+    if is_boss:
+        st.subheader("📧 End of Day Report")
+        st.caption("Click this before you leave the factory to get today's sales and collection totals.")
+        if st.button("📈 Send Daily Sales Summary Now", use_container_width=True):
+            with st.spinner("Miss PP is compiling the report..."):
+                if send_daily_summary(q_df):
+                    st.success("✅ Daily Summary sent to your email successfully!")
+        st.divider()
+    # ----------------------------------------------
 
-# --- 10. MODULE: QUOTE & CRM ---
+    st.subheader("📊 Sales Force Analytics")
+    if not q_df.empty: st.bar_chart(q_df.groupby("Sales_Person")["Price"].sum())# --- 10. MODULE: QUOTE & CRM ---
 elif menu == "📝 Quote & CRM":
     st.header("📝 Create Quotation")
     MANAGERS = {"Iris": "iris888", "Tomy": "tomy999"}
