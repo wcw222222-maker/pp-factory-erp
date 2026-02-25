@@ -55,14 +55,11 @@ def send_daily_summary(q_df):
         receivers_str = st.secrets["email"]["receiver"]
         receiver_list = [email.strip() for email in receivers_str.split(",")]
 
-        # Get today's date
         today_str = datetime.now().strftime("%Y-%m-%d")
         
-        # Filter the data for TODAY
         today_quotes = q_df[q_df["Date"] == today_str]
         today_paid = q_df[q_df["Date_Paid"] == today_str]
         
-        # Calculate Math
         new_sales = today_quotes[today_quotes["Status"] != "Lost"]["Price"].sum()
         collected_cash = today_paid["Price"].sum()
         quotes_count = len(today_quotes)
@@ -103,16 +100,13 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #e1f5fe; border-right: 2px solid #b3e5fc; }
     header[data-testid="stHeader"] { background-color: #f0f8ff !important; }
     
-    /* Text Colors - Keep Orange Theme for text */
     .stMarkdown, .stText, p, div, span, label, li, h1, h2, h3, h4, h5, h6, b, strong { color: #d84315 !important; }
     [data-testid="stMetricValue"] { color: #bf360c !important; }
     
-    /* Inputs */
     .stTextInput>div>div>input, .stNumberInput>div>div>input, .stSelectbox>div>div>div, .stTextArea>div>div>textarea {
         background-color: #ffffff !important; color: #d84315 !important; border: 2px solid #ffab91;
     }
     
-    /* BUTTONS - DARK GREEN */
     .stButton>button { 
         background-color: #2e7d32 !important; 
         color: white !important; 
@@ -249,19 +243,30 @@ def generate_pdf(doc_type, data, customer_df):
     p.drawRightString(width - 50, 50, "_"*30); p.drawRightString(width - 50, 40, "Customer Chop & Sign")
     p.save(); return buffer
 
-# --- 6. MISS PP AI LOGIC (SMARTER VERSION) ---
+# --- 6. CORE PRICING ENGINE & AI LOGIC ---
+def get_pricing_rate(surface_type, weight_kg):
+    """Central logic to determine price per kg based on surface and volume."""
+    if surface_type == "Shining / Shining":
+        return 23.00 if weight_kg >= 1000 else 46.00
+    elif surface_type == "Sandy / Shining":
+        return 20.00 if weight_kg >= 1000 else 40.00
+    elif surface_type == "Sandy / Emboss":
+        return 21.00 if weight_kg >= 1000 else 42.00
+    elif surface_type == "Lining / Shining":
+        return 22.00 if weight_kg >= 1000 else 44.00
+    else:
+        # Default fallback
+        return 21.00 if weight_kg >= 1000 else 42.00 
+
 def get_smart_response(user_text):
     text = user_text.lower()
     
-    # 1. GREETINGS
     if any(x in text for x in ["hi", "hello", "hey", "morning", "afternoon", "boss"]):
-        return "Hello Boss! 👋 I'm ready to calculate. Tell me what the customer needs (e.g. '2000pcs 0.5mm')."
+        return "Hello Boss! 👋 I'm ready to calculate. Tell me what the customer needs (e.g. '2000pcs 0.5mm shining')."
     
-    # 2. AGREEMENT / THANKS
     if any(x in text for x in ["thanks", "thank", "ok", "yes", "proceed", "good", "nice"]):
         return "You're welcome Boss! 😊 Let me know if you need another quote."
 
-    # 3. QUESTION: RECOMMENDATIONS
     if any(x in text for x in ["recommend", "suggest", "best", "packaging", "box"]):
         return (
             "💡 **Recommendation:**\n"
@@ -270,21 +275,19 @@ def get_smart_response(user_text):
             "Do you want me to quote for 1000pcs of 0.5mm to start?"
         )
 
-    # 4. QUESTION: PRICE
     if any(x in text for x in ["price", "cost", "expensive", "rate", "cheap"]):
         return (
-            "💰 **Current Pricing:**\n"
-            "- **Standard (>100kg):** RM 12.60/kg\n"
-            "- **Mid Volume (<100kg):** RM 26.00/kg\n"
-            "- **Sample (<10kg):** RM 36.00/kg\n\n"
-            "Give me the Qty & Thickness, and I'll tell you the exact total!"
+            "💰 **Current Pricing (per kg):**\n"
+            "- **Shining/Shining:** RM 23 (≥1000kg) | RM 46 (<1000kg)\n"
+            "- **Sandy/Shining:** RM 20 (≥1000kg) | RM 40 (<1000kg)\n"
+            "- **Sandy/Emboss:** RM 21 (≥1000kg) | RM 42 (<1000kg)\n"
+            "- **Lining/Shining:** RM 22 (≥1000kg) | RM 44 (<1000kg)\n\n"
+            "Tell me the Surface, Qty & Thickness, and I'll calculate the exact total!"
         )
 
-    # 5. QUESTION: DELIVERY
     if any(x in text for x in ["delivery", "time", "long", "when", "ship"]):
         return "🚚 **Lead Time:** Usually 7-10 days for production. If urgent, please ask Mr. Boss to check the production schedule tab!"
 
-    # 6. DEFAULT FAIL
     return None
 
 def parse_sales_request(user_text):
@@ -303,10 +306,15 @@ def parse_sales_request(user_text):
     elif "special" in user_text: response['color'] = "Special"
     else: response['color'] = "Silk Nature"
     
-    if "emboss" in user_text: response['surface'] = "Sandy / Emboss"
-    elif "lining" in user_text: response['surface'] = "Lining / Shining"
-    elif "shining" in user_text and "sandy" in user_text: response['surface'] = "Sandy / Shining"
-    else: response['surface'] = "Sandy / Emboss" 
+    # Surface logic prioritizing double word matches
+    if "shining" in user_text and "sandy" not in user_text and "lining" not in user_text: 
+        response['surface'] = "Shining / Shining"
+    elif "lining" in user_text: 
+        response['surface'] = "Lining / Shining"
+    elif "shining" in user_text and "sandy" in user_text: 
+        response['surface'] = "Sandy / Shining"
+    else: 
+        response['surface'] = "Sandy / Emboss" # Default
     
     return response
 
@@ -322,7 +330,7 @@ with st.sidebar:
 # --- 8. MODULE: MISS PP (SMART CHAT AGENT) ---
 if menu == "👩‍💼 Ask Miss PP":
     st.header("👩‍💼 Chat with Miss PP")
-    st.caption("Type your request below like you are talking to Sujita.")
+    st.caption("Type your request below (e.g., '2000pcs 0.5mm shining/shining').")
 
     if "messages" not in st.session_state: st.session_state.messages = []
     if "latest_quote" not in st.session_state: st.session_state.latest_quote = None
@@ -343,12 +351,12 @@ if menu == "👩‍💼 Ask Miss PP":
                 st.toast("✅ Saved successfully!")
                 st.session_state.latest_quote = None; time.sleep(1); st.rerun()
 
-    if prompt := st.chat_input("Type request (e.g. '2000pcs 0.5mm black sandy'):"):
+    if prompt := st.chat_input("Type request..."):
         with st.chat_message("user"): st.markdown(prompt)
         st.session_state.messages.append({"role": "user", "content": prompt})
 
         with st.chat_message("assistant"):
-            with st.spinner("Miss PP is thinking..."):
+            with st.spinner("Miss PP is calculating..."):
                 time.sleep(0.5) 
                 
                 chat_reply = get_smart_response(prompt)
@@ -361,12 +369,13 @@ if menu == "👩‍💼 Ask Miss PP":
                     if data:
                         wd, lg = 650.0, 900.0
                         weight = (data['thick'] * wd * lg * 0.91 * data['qty']) / 1000000
-                        price_rate = 12.60
-                        if weight < 10: price_rate = 36.00
-                        elif weight < 100: price_rate = 26.00
+                        
+                        # Use the new pricing engine
+                        price_rate = get_pricing_rate(data['surface'], weight)
                         total_price = weight * price_rate
                         
                         prod_desc = f"PP {data['surface']} {data['color']} {data['thick']}mm x {wd}mm x {lg}mm"
+                        vol_msg = "Volume Rate (≥1000kg)" if weight >= 1000 else "Low Volume (<1000kg)"
                         
                         response_text = (
                             f"**Quote Generated!** 📝\n\n"
@@ -374,8 +383,8 @@ if menu == "👩‍💼 Ask Miss PP":
                             f"📏 **Specs:** {data['thick']}mm x {wd}mm x {lg}mm\n"
                             f"🔢 **Qty:** {data['qty']} pcs\n"
                             f"⚖️ **Weight:** {weight:.2f} kg\n"
-                            f"💰 **Total:** RM {total_price:,.2f} (Rate: RM {price_rate:.2f}/kg)\n\n"
-                            f"*WhatsApp Draft (Copy & Send):*\n"
+                            f"💰 **Total:** RM {total_price:,.2f} (Rate: RM {price_rate:.2f}/kg - *{vol_msg}*)\n\n"
+                            f"*WhatsApp Draft:*\n"
                             f"```\nHi Boss! Quote for {data['qty']}pcs {data['thick']}mm is RM {total_price:,.2f}. Proceed?\n```"
                         )
                         st.markdown(response_text)
@@ -383,7 +392,7 @@ if menu == "👩‍💼 Ask Miss PP":
                         st.session_state.latest_quote = {"desc": prod_desc, "weight": weight, "total_price": total_price, "qty": data['qty']}
                         st.rerun()
                     else:
-                        fail_msg = "😅 I'm just a humble bot, I didn't understand that. Try asking about **Price**, **Recommendations**, or give me a **Qty** to calculate!"
+                        fail_msg = "😅 I didn't understand that. Try asking about **Price**, **Recommendations**, or give me a **Qty** to calculate!"
                         st.markdown(fail_msg)
                         st.session_state.messages.append({"role": "assistant", "content": fail_msg})
 
@@ -392,8 +401,6 @@ elif menu == "🏠 Dashboard":
     st.header("🏠 Factory & Sales Dashboard")
     
     q_df = ensure_cols(load_data("QUOTE"), ["Price", "Status", "Sales_Person", "Payment_Status", "Date", "Date_Paid"])
-    
-    # 🚨 Force Price to numeric to prevent crashes
     q_df["Price"] = pd.to_numeric(q_df["Price"], errors='coerce').fillna(0.0)
     
     c1, c2, c3 = st.columns(3)
@@ -448,7 +455,7 @@ elif menu == "📝 Quote & CRM":
                     st.link_button(f"🟢 Chat with {cin}", f"https://wa.me/{clean_ph}")
 
         sc1, sc2 = st.columns(2)
-        surf_type = sc1.selectbox("Surface Type", ["Sandy / Emboss", "Sandy / Shining", "Shining / Shining", "Lining / Shining"])
+        surf_type = sc1.selectbox("Surface Type", ["Shining / Shining", "Sandy / Shining", "Sandy / Emboss", "Lining / Shining"], index=2)
         color_type = sc2.selectbox("Color", ["Silk Nature", "Black", "White", "Special"])
         
         col1, col2, col3, col4 = st.columns(4)
@@ -459,10 +466,9 @@ elif menu == "📝 Quote & CRM":
         
         calc_wgt = (th * wd * lg * 0.91 * qty) / 1000000
         
-        suggested_price = 12.60; price_msg = "Standard Rate"
-        if calc_wgt > 0:
-            if calc_wgt < 10: suggested_price = 36.00; price_msg = "⚠️ Low Volume (<10kg)"
-            elif calc_wgt < 100: suggested_price = 26.00; price_msg = "⚠️ Mid Volume (<100kg)"
+        # Use the central pricing engine
+        suggested_price = get_pricing_rate(surf_type, calc_wgt)
+        price_msg = "Volume Rate (≥1000kg)" if calc_wgt >= 1000 else "⚠️ Low Volume (<1000kg)"
         
         st.caption(f"Material Pricing: **{price_msg}**")
         mat_rate = st.number_input("Material Price/KG (RM)", value=suggested_price)
@@ -480,13 +486,13 @@ elif menu == "📝 Quote & CRM":
         grand_total = material_total + printing_cost
         
         can_save, auth_lvl = True, "Standard"
-        min_rate = 12.60
-        if calc_wgt < 10: min_rate = 36.00
-        elif calc_wgt < 100: min_rate = 26.00
+        
+        # The min rate is determined by the formula
+        min_rate = get_pricing_rate(surf_type, calc_wgt) 
         
         if mat_rate < min_rate:
             if is_boss: auth_lvl = "BOSS_BYPASS"; st.warning(f"⚠️ Boss Override Active")
-            else: st.error(f"🚫 Min RM {min_rate}"); can_save = False
+            else: st.error(f"🚫 Min rate for {surf_type} at {calc_wgt:.1f}kg is RM {min_rate:.2f}"); can_save = False
             
         st.success(f"💰 **TOTAL: RM {grand_total:,.2f}**")
         
@@ -558,11 +564,9 @@ elif menu == "🏭 Production":
                 real_input = st.number_input("Total Resin Input (kg)", min_value=0.0, step=1.0)
                 if st.form_submit_button("✅ Finish & Calculate Waste"):
                     if real_input >= r['Weight']:
-                        # WASTE CALCULATION
                         waste = real_input - r['Weight']
                         waste_pct = (waste / real_input) * 100 if real_input > 0 else 0
                         
-                        # TRIGGER ALERT IF WASTE > 10%
                         if waste_pct > 10:
                             st.error(f"⚠️ HIGH WASTE: {waste_pct:.1f}%")
                             send_waste_alert(r['Doc_ID'], r['Customer'], waste_pct, real_input, r['Weight'])
@@ -615,7 +619,7 @@ elif menu == "💰 Payments":
                 if c3.button("Confirm Paid", key=f"pay_{i}"):
                     idx = q_df[q_df["Doc_ID"] == r["Doc_ID"]].index[0]
                     q_df.at[idx, "Payment_Status"] = "Paid"
-                    q_df.at[idx, "Date_Paid"] = datetime.now().strftime("%Y-%m-%d") # RECORD DATE PAID
+                    q_df.at[idx, "Date_Paid"] = datetime.now().strftime("%Y-%m-%d") 
                     save_data(q_df, "QUOTE"); st.rerun()
 
 # --- 15. MODULE: COMMISSION ---
